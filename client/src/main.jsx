@@ -1,5 +1,5 @@
 // OrderBoard React frontend. React components are functions returning JSX (page layout).
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   LayoutDashboard, ClipboardList, Cake, CalendarDays, Package, Wallet,
@@ -55,18 +55,72 @@ function OrdersAndReservations({ request, intent, active, navigate }) {
     <div hidden={tab !== 'reservations'} className="workspace-pane"><Reservations request={request} navigate={navigate} intent={tab === 'reservations' ? activeIntent : null} active={active && tab === 'reservations'}/></div>
   </div>;
 }
+function StaffHistoryDialog({ person, onClose }) {
+  const dialogRef = useRef(null);
+  const [history, setHistory] = useState(null);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog.open) dialog.showModal();
+
+    const controller = new AbortController();
+    request(`/api/security/staff/${person.id}/history`, { signal: controller.signal })
+      .then(result => {
+        if (!controller.signal.aborted) setHistory(result.history);
+      })
+      .catch(error => {
+        if (!controller.signal.aborted) setError(error.message);
+      });
+
+    return () => controller.abort();
+  }, [person.id]);
+
+  return <dialog
+    ref={dialogRef}
+    className="staff-panel staff-history-dialog"
+    aria-labelledby="staff-history-title"
+    onClose={onClose}
+    onClick={event => {
+      if (event.target === event.currentTarget) event.currentTarget.close();
+    }}
+  >
+    <header className="staff-history-header">
+      <h3 id="staff-history-title">Login history — {person.name}</h3>
+      <form method="dialog">
+        <button type="submit" className="status-button">Close</button>
+      </form>
+    </header>
+    <div className="staff-history-body">
+      {error ? <p role="alert" className="error">{error}</p>
+        : history === null ? <p role="status">Loading login history…</p>
+        : history.length === 0 ? <p>No login history yet.</p>
+        : <div className="staff-list">
+          {history.map(event => <div className="staff-record" key={event.id}>
+            <div className="staff-person">
+              <strong>{event.outcome === 'success' ? 'Successful login' : 'Failed login'}</strong>
+              <span>{event.device} · {event.browser}</span>
+              <small>{new Date(event.createdAt).toLocaleString()} · IP: {event.ipAddress}</small>
+            </div>
+          </div>)}
+        </div>}
+    </div>
+  </dialog>;
+}
+
 // Owner-only screen: create, list and activate/deactivate staff accounts.
 function StaffManager({active}){
  const [staff,setStaff]=useState([]),[loading,setLoading]=useState(true),[error,setError]=useState(''),[notice,setNotice]=useState(''),[saving,setSaving]=useState(false),[name,setName]=useState(''),[email,setEmail]=useState(''),[password,setPassword]=useState(''),[selectedHistory,setSelectedHistory]=useState(null);
- async function showStaffHistory(person){setError('');try{const result=await request(`/api/security/staff/${person.id}/history`);setSelectedHistory(result);}catch(e){setError(e.message);}}
  async function revokeStaffSessions(person){if(!window.confirm(`Sign out all devices for ${person.name}?`))return;setError('');try{await request(`/api/security/staff/${person.id}/revoke`,{method:'POST'});setNotice('Staff sessions revoked.');}catch(e){setError(e.message);}}
  async function load(force=false){setLoading(true);try{const r=await request('/api/staff',force?{refresh:true}:{});setStaff(r.staff);setError('');}catch(e){setError(e.message);}finally{setLoading(false);}}
  useEffect(()=>{load();},[]);
  const staffWasActive = React.useRef(active);
- useEffect(()=>{if(active && !staffWasActive.current) load(true);staffWasActive.current=active;},[active]);
+ useEffect(()=>{if(active && !staffWasActive.current) load(true);if(!active) setSelectedHistory(null);staffWasActive.current=active;},[active]);
  async function create(e){e.preventDefault();setSaving(true);setError('');setNotice('');try{await request('/api/staff',{method:'POST',body:JSON.stringify({name,email,password})});setName('');setEmail('');setPassword('');setNotice('Staff account created successfully.');await load();}catch(e){setError(e.message);}finally{setSaving(false);}}
  async function toggle(person){if(!window.confirm(`${person.active?'Deactivate':'Reactivate'} ${person.name}?`))return;setSaving(true);setError('');setNotice('');try{await request(`/api/staff/${person.id}/status`,{method:'PATCH',body:JSON.stringify({active:!person.active})});setNotice('Staff status updated.');await load();}catch(e){setError(e.message);}finally{setSaving(false);}}
- return <div className="staff-layout"><section className="staff-panel"><h3><UserPlus size={19}/> Create staff account</h3><p>Only the Owner can create accounts. Staff passwords are never shown or stored as plain text.</p><form onSubmit={create} className="staff-form"><label>Full name<input required minLength={2} maxLength={100} value={name} onChange={e=>setName(e.target.value)} placeholder="Staff full name"/></label><label>Email address<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="staff@example.com"/></label><label>Temporary password (at least 12 characters)<input type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="Choose a unique password"/></label><button className="primary" disabled={saving} type="submit">{saving?'Saving…':'Create staff account'}</button></form></section><section className="staff-panel"><h3><Users size={19}/> Staff accounts</h3><p>Deactivated accounts cannot sign in or continue using protected APIs.</p>{error&&<div role="alert" className="error">{error}</div>}{notice&&<div role="status" className="success-note">{notice}</div>}{loading?<p>Loading staff accounts…</p>:staff.length===0?<p>No staff accounts yet.</p>:<div className="staff-list">{staff.map(person=><div key={person.id} className="staff-record"><div className="staff-person"><strong>{person.name}</strong><span>{person.email}</span><small>{person.active?'Active':'Deactivated'}</small></div><button type="button" className="status-button" onClick={()=>showStaffHistory(person)}>History</button><button type="button" className="status-button" onClick={()=>revokeStaffSessions(person)}>Sign out devices</button><button type="button" className="status-button" disabled={saving} onClick={()=>toggle(person)}>{person.active?'Deactivate':'Reactivate'}</button></div>)}</div>}</section>{selectedHistory&&<section className="staff-panel"><h3>Login history — {selectedHistory.staff.name}</h3><button className="status-button" onClick={()=>setSelectedHistory(null)}>Close history</button><div className="staff-list">{selectedHistory.history.length?selectedHistory.history.map(event=><div className="staff-record" key={event.id}><div className="staff-person"><strong>{event.outcome==='success'?'Successful login':'Failed login'}</strong><span>{event.device} · {event.browser}</span><small>{new Date(event.createdAt).toLocaleString()} · IP: {event.ipAddress}</small></div></div>):<p>No login history yet.</p>}</div></section>}</div>;
+ return <div className="staff-layout"><section className="staff-panel"><h3><UserPlus size={19}/> Create staff account</h3><p>Only the Owner can create accounts. Staff passwords are never shown or stored as plain text.</p><form onSubmit={create} className="staff-form"><label>Full name<input required minLength={2} maxLength={100} value={name} onChange={e=>setName(e.target.value)} placeholder="Staff full name"/></label><label>Email address<input type="email" required value={email} onChange={e=>setEmail(e.target.value)} placeholder="staff@example.com"/></label><label>Temporary password (at least 12 characters)<input type="password" autoComplete="new-password" minLength={12} maxLength={128} required value={password} onChange={e=>setPassword(e.target.value)} placeholder="Choose a unique password"/></label><button className="primary" disabled={saving} type="submit">{saving?'Saving…':'Create staff account'}</button></form></section><section className="staff-panel"><h3><Users size={19}/> Staff accounts</h3><p>Deactivated accounts cannot sign in or continue using protected APIs.</p>{error&&<div role="alert" className="error">{error}</div>}{notice&&<div role="status" className="success-note">{notice}</div>}{loading?<p>Loading staff accounts…</p>:staff.length===0?<p>No staff accounts yet.</p>:<div className="staff-list">{staff.map(person=><div key={person.id} className="staff-record"><div className="staff-person"><strong>{person.name}</strong><span>{person.email}</span><small>{person.active?'Active':'Deactivated'}</small></div><button type="button" className="status-button" aria-haspopup="dialog" onClick={()=>setSelectedHistory(person)}>History</button><button type="button" className="status-button" onClick={()=>revokeStaffSessions(person)}>Sign out devices</button><button type="button" className="status-button" disabled={saving} onClick={()=>toggle(person)}>{person.active?'Deactivate':'Reactivate'}</button></div>)}</div>}</section>
+ {active && selectedHistory && <StaffHistoryDialog key={selectedHistory.id} person={selectedHistory} onClose={()=>setSelectedHistory(null)}/>}
+ </div>;
 }
 
 // Security Center is available to both Owner and Staff.
@@ -275,14 +329,14 @@ function App() {
     function shortcut(event) {
       // Slash focuses the list search; prevent accidental text input interception.
       if (event.key === '/' && !event.altKey && !event.ctrlKey && !event.metaKey && !event.repeat) {
-        if (!event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) {
+        if (!event.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) {
           const search = [...document.querySelectorAll('.search-field input')].find(element => element.getClientRects().length > 0);
           if (search) { event.preventDefault(); search.focus(); }
         }
         return;
       }
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return;
-      if (event.target.closest('input, textarea, select, [contenteditable="true"], [role="dialog"]')) return;
+      if (event.target.closest('input, textarea, select, [contenteditable="true"], dialog, [role="dialog"]')) return;
       const pages = { '1': 'Dashboard', '2': 'Orders & Reservations', '3': 'Cake Production' };
       if (pages[event.key]) { event.preventDefault(); navigate(pages[event.key]); }
       if (event.key.toLowerCase() === 'n') { event.preventDefault(); navigate('Orders & Reservations', { tab: 'orders', create: true }); }
