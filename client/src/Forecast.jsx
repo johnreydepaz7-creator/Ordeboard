@@ -18,7 +18,6 @@ const periodOptions = {
 const dayMs = 86_400_000;
 const fullDate = new Intl.DateTimeFormat('en-PH', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
 const rangeDate = new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
-const currency = new Intl.NumberFormat('en-PH', { style: 'currency', currency: 'PHP' });
 const number = new Intl.NumberFormat('en-PH', { maximumFractionDigits: 1 });
 const orderCount = count => number.format(count) + (count === 1 ? ' order' : ' orders');
 
@@ -28,34 +27,34 @@ function rangeLabel({ from, to }) {
 
 function buildDays(result, range) {
   const predictions = new Map(result.forecast.map(day => [day.date, day]));
-  const actuals = new Map(result.actuals.map(day => [day.date, day]));
-  const workload = new Map(result.workload.map(day => [day.date, day]));
   const days = [];
   for (let time = Date.parse(range.from); time <= Date.parse(range.to); time += dayMs) {
     const date = new Date(time).toISOString().slice(0, 10);
-    days.push({ date, time, prediction: predictions.get(date), actual: actuals.get(date), workload: workload.get(date) });
+    days.push({ date, time, prediction: predictions.get(date) });
   }
   return days;
 }
 
 function summarize(days) {
-  let recordedOrders = 0;
-  let recordedSales = 0;
   let projectedOrders = 0;
-  let projectedSales = 0;
   let busiest;
-  for (const { actual, prediction } of days) {
-    if (actual) {
-      recordedOrders += actual.orders;
-      recordedSales += Math.round(actual.sales * 100);
-    }
+  for (const { prediction } of days) {
     if (prediction) {
       projectedOrders += Math.round(prediction.expectedOrders * 10);
-      projectedSales += Math.round(prediction.estimatedSales * 100);
       if (prediction.expectedOrders > (busiest?.expectedOrders ?? 0)) busiest = prediction;
     }
   }
-  return { recordedOrders, recordedSales: recordedSales / 100, projectedOrders: projectedOrders / 10, projectedSales: projectedSales / 100, busiest };
+  return { projectedOrders: projectedOrders / 10, busiest };
+}
+
+function summarizeProducts(days) {
+  const totals = new Map();
+  for (const { prediction } of days) {
+    for (const { name, expectedUnits } of prediction?.products || []) {
+      totals.set(name, (totals.get(name) || 0) + Math.round(expectedUnits * 10));
+    }
+  }
+  return [...totals].map(([name, units]) => ({ name, expectedUnits: units / 10 }));
 }
 
 function monthWeeks(days) {
@@ -68,62 +67,53 @@ function monthWeeks(days) {
     from: week[0].date,
     to: week.at(-1).date,
     ...summarize(week),
-    hasActuals: week.some(day => day.actual),
     hasEstimates: week.some(day => day.prediction),
   }));
 }
 
-function ForecastSummary({ days, summary }) {
-  const { recordedOrders, recordedSales, projectedOrders, projectedSales } = summary;
-  const hasActuals = days.some(day => day.actual);
-  const hasEstimates = days.some(day => day.prediction);
-  return <dl className="forecast-metrics">
-    {hasActuals && <>
-      <div><dt>Recorded orders</dt><dd>{number.format(recordedOrders)}</dd></div>
-      <div><dt>Recorded sales</dt><dd>{currency.format(recordedSales)}</dd></div>
-    </>}
-    {hasEstimates && <>
-      <div><dt>{hasActuals ? 'Estimated remaining orders' : 'Estimated total orders'}</dt><dd>{number.format(projectedOrders)}</dd></div>
-      <div><dt>{hasActuals ? 'Estimated remaining sales' : 'Estimated total sales'}</dt><dd>{currency.format(projectedSales)}</dd></div>
-      {hasActuals && <>
-        <div><dt>Estimated total orders</dt><dd>{number.format(recordedOrders + projectedOrders)}</dd></div>
-        <div><dt>Estimated total sales</dt><dd>{currency.format(Math.round((recordedSales + projectedSales) * 100) / 100)}</dd></div>
-      </>}
-    </>}
-  </dl>;
+function ProductList({ products }) {
+  return <ul className="forecast-products">{products.map(({ name, expectedUnits }) =>
+    <li key={name}><span>{name}</span><strong>{number.format(expectedUnits)} {expectedUnits === 1 ? 'unit' : 'units'}</strong></li>
+  )}</ul>;
+}
+
+function ExpectedProducts({ products }) {
+  const ranked = [...products].sort((a, b) => b.expectedUnits - a.expectedUnits || a.name.localeCompare(b.name));
+  const remaining = ranked.slice(5);
+  return <div className="forecast-expected-products">
+    <h4>Expected product demand</h4>
+    {ranked.length ? <ProductList products={ranked.slice(0, 5)}/> : <p>No product estimates for this period.</p>}
+    {remaining.length > 0 && <details>
+      <summary>Show {remaining.length} more {remaining.length === 1 ? 'product' : 'products'}</summary>
+      <ProductList products={remaining}/>
+    </details>}
+  </div>;
 }
 
 function DayDetails({ day, panelRef }) {
   const label = fullDate.format(day.time);
   return <section className="forecast-day-details" ref={panelRef} tabIndex={-1} aria-labelledby="forecast-day-title">
     <h4 id="forecast-day-title">{label}</h4>
-    {day.prediction ? <p>Based on past sales, we expect an average of <strong>{orderCount(day.prediction.expectedOrders)}</strong> on {label}.</p>
-      : day.actual ? <p><strong>{orderCount(day.actual.orders)}</strong> recorded.</p>
-      : <p>No estimate available for this date.</p>}
-    <dl className="forecast-metrics">
-      {day.prediction && <div><dt>Estimated sales</dt><dd>{currency.format(day.prediction.estimatedSales)}</dd></div>}
-      {day.actual ? <div><dt>Recorded sales</dt><dd>{currency.format(day.actual.sales)}</dd></div> : <>
-        <div><dt>Confirmed pickups</dt><dd>{day.workload?.confirmedPickups ?? 0}</dd></div>
-        <div><dt>Cake jobs due</dt><dd>{day.workload?.cakeJobs ?? 0}</dd></div>
-      </>}
-    </dl>
+    {day.prediction ? <>
+      <p>Based on past orders, we expect an average of <strong>{orderCount(day.prediction.expectedOrders)}</strong> on {label}.</p>
+      <ExpectedProducts products={day.prediction.products}/>
+    </> : <p>No estimate available for this date.</p>}
   </section>;
 }
 
 function DayList({ days, busiest, selectedDate, onSelect }) {
   return <table className="forecast-date-table">
-    <thead><tr><th scope="col">Date</th><th scope="col">Orders</th><th scope="col">Sales</th></tr></thead>
-    <tbody>{days.map(({ date, time, prediction, actual }) => {
+    <thead><tr><th scope="col">Date</th><th scope="col">Expected orders</th></tr></thead>
+    <tbody>{days.map(({ date, time, prediction }) => {
       const isBusiest = busiest && prediction?.expectedOrders === busiest.expectedOrders;
       return <tr key={date} className={isBusiest ? 'forecast-peak-row' : undefined}>
         <th scope="row">
           <button type="button" className="forecast-date-link" aria-pressed={date === selectedDate} onClick={() => onSelect(date)}>
             {fullDate.format(time)}
           </button>
-          <small>{isBusiest ? 'Busiest forecast' : actual ? 'Recorded' : prediction ? 'Forecast' : 'Estimate unavailable'}</small>
+          {isBusiest && <small>Busiest forecast</small>}
         </th>
-        <td>{actual ? number.format(actual.orders) : prediction ? number.format(prediction.expectedOrders) : '—'}</td>
-        <td>{actual ? currency.format(actual.sales) : prediction ? currency.format(prediction.estimatedSales) : '—'}</td>
+        <td>{prediction ? number.format(prediction.expectedOrders) : '—'}</td>
       </tr>;
     })}</tbody>
   </table>;
@@ -157,7 +147,7 @@ export default function Forecast({ request, active = true }) {
   const range = week || result;
   const days = result ? buildDays(result, range) : [];
   const summary = summarize(days);
-  const selectedDay = days.find(day => day.date === selectedDate) || days.find(day => !day.actual) || days[0];
+  const selectedDay = days.find(day => day.date === selectedDate) || days[0];
   const tiedPeak = summary.busiest && days.filter(day => day.prediction?.expectedOrders === summary.busiest.expectedOrders).length > 1;
 
   useEffect(() => {
@@ -225,7 +215,7 @@ export default function Forecast({ request, active = true }) {
         {summary.busiest && <div className="forecast-peak">
           <div>
             <strong>Busiest expected day</strong>
-            <p>Based on past sales, {fullDate.format(Date.parse(summary.busiest.date))} {tiedPeak
+            <p>Based on past orders, {fullDate.format(Date.parse(summary.busiest.date))} {tiedPeak
               ? 'is one of the busiest expected days in this period'
               : 'is expected to be the busiest day in this period'
             }, with an average of <strong>{orderCount(summary.busiest.expectedOrders)}</strong>.</p>
@@ -234,21 +224,20 @@ export default function Forecast({ request, active = true }) {
             View day <ChevronRight size={15} aria-hidden="true"/>
           </button>
         </div>}
-        {result.status !== 'ready' && <p>No forecast yet. At least 14 completed, fully paid orders across 7 different days are needed.</p>}
-        {result.status === 'ready' && !summary.busiest && range.to >= result.today && <p>No paid orders are expected in the upcoming dates for this period.</p>}
-        {days.some(day => day.actual) && <p>Recorded totals include days through yesterday. Today uses a full-day forecast.</p>}
-        <ForecastSummary days={days} summary={summary}/>
+        {result.status === 'ready' ? <>
+          <dl className="forecast-metrics"><div><dt>Estimated total orders</dt><dd>{number.format(summary.projectedOrders)}</dd></div></dl>
+          {view !== 'Daily' && <ExpectedProducts products={summarizeProducts(days)}/>}
+        </> : <p>There isn’t enough order history to generate a forecast yet.</p>}
       </section>
 
       {view === 'Monthly' ? <section className="report-panel">
         <h3>Weeks in this month</h3>
         <table className="forecast-date-table">
-          <thead><tr><th scope="col">Week</th><th scope="col">Recorded orders</th><th scope="col">Estimated orders</th></tr></thead>
+          <thead><tr><th scope="col">Week</th><th scope="col">Expected orders</th></tr></thead>
           <tbody>{monthWeeks(days).map(item => <tr key={item.from}>
             <th scope="row">
               <button className="forecast-date-link" type="button" onClick={() => showWeek(item.from, item.to)}>{rangeLabel(item)}</button>
             </th>
-            <td>{item.hasActuals ? number.format(item.recordedOrders) : '—'}</td>
             <td>{item.hasEstimates ? number.format(item.projectedOrders) : '—'}</td>
           </tr>)}</tbody>
         </table>
@@ -257,20 +246,6 @@ export default function Forecast({ request, active = true }) {
         {selectedDay && <DayDetails day={selectedDay} panelRef={detailsRef}/>}
         <DayList days={days} busiest={summary.busiest} selectedDate={selectedDay?.date} onSelect={setSelectedDate}/>
       </section>}
-
-      <section className="report-panel">
-        <h3>Historically popular products</h3>
-        {result.topProducts.length ? <ul className="forecast-products">{result.topProducts.map(product =>
-          <li key={product.name}><span>{product.name}</span><strong>{number.format(product.quantity)} units sold</strong></li>
-        )}</ul> : <p>No products recorded in the last {result.historicalDays} days.</p>}
-      </section>
-      <section className="report-panel">
-        <details className="forecast-method">
-          <summary>How the forecast is calculated</summary>
-          <p>{result.qualifyingOrders} qualifying orders across {result.activeSalesDays} selling days in the previous {result.historicalDays} days.</p>
-          <ul>{result.notes.map(note => <li key={note}>{note}</li>)}</ul>
-        </details>
-      </section>
     </>}
   </div>;
 }

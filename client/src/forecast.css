@@ -34,13 +34,7 @@
 .forecast-peak > div { flex: 1 1 240px; }
 .forecast-peak p, .forecast-day-details p { margin: 4px 0 0; line-height: 1.5; }
 .forecast-peak p strong, .forecast-day-details p strong { color: var(--ink); }
-.forecast-metrics {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 135px), 1fr));
-  gap: 8px;
-  margin: 12px 0 0;
-}
-.forecast-metrics:empty { display: none; }
+.forecast-metrics { max-width: 220px; margin: 12px 0 0; }
 .forecast-metrics > div {
   padding: 8px 10px;
   border: 1px solid var(--line);
@@ -76,11 +70,11 @@
   text-decoration: underline;
   text-underline-offset: 3px;
 }
+.forecast-expected-products { margin-top: 14px; }
+.forecast-expected-products h4 { margin: 0 0 4px; font-size: 13px; }
+.forecast-expected-products summary { margin-top: 8px; color: var(--accent-text); font-size: 13px; cursor: pointer; }
 .forecast-products { list-style: none; margin: 0; padding: 0; }
 .forecast-products li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .forecast-products li:last-child { border-bottom: 0; }
 .forecast-products span { overflow-wrap: anywhere; min-width: 0; }
 .forecast-products strong { white-space: nowrap; }
-.forecast-method summary { font-weight: 700; cursor: pointer; }
-.forecast-method ul { padding-left: 20px; }
-.forecast-method li { margin: 5px 0; }
