@@ -1,5 +1,6 @@
 import React,{useEffect,useState,useRef} from 'react';
 import {BarChart3,Download,RefreshCcw} from 'lucide-react';
+import SalesTrends from './SalesTrends.jsx';
 // Browsers send date-only strings. The server applies Philippine reporting time.
 const today=()=>{const d=new Date(Date.now()+8*3600000);return d.toISOString().slice(0,10);};
 const firstDay=()=>today().slice(0,7)+'-01';
@@ -23,10 +24,9 @@ export default function Reports({request,active=true}){
     if (active && !wasActive.current) load(true);
     wasActive.current = active;
   }, [active]);
- const peak=Math.max(1,...(report?.trend||[]).flatMap(d=>[d.sales,d.expenses]));
  return <div className="reports-layout"><section className="report-panel"><div className="report-toolbar"><div><h3><BarChart3 size={19}/> Reports & Analytics</h3><p>Review business performance from recorded orders and expenses.</p></div><div className="report-filters"><label>From<input type="date" value={from} onChange={e=>setFrom(e.target.value)}/></label><label>To<input type="date" value={to} onChange={e=>setTo(e.target.value)}/></label><button type="button" className="primary" disabled={loading} onClick={()=>load(true)}><RefreshCcw size={16}/> {loading?'Loading…':'Generate report'}</button><button type="button" className="status-button" disabled={!report||loading} onClick={()=>exportCsv(report)}><Download size={16}/> Export CSV</button></div></div>{error&&<div role="alert" className="error">{error}</div>}</section>
  {report&&<><div className="report-kpis">{[['Completed paid sales',peso(report.summary.sales)],['Recorded expenses',peso(report.summary.expenses)],['Sales minus expenses',peso(report.summary.balance)],['Paid orders',report.summary.orderCount],['Average paid order',peso(report.summary.averageOrderValue)]].map(([label,value])=><article className="report-kpi" key={label}><small>{label}</small><strong>{value}</strong></article>)}</div>
- <section className="report-panel"><h3>Daily sales and expenses</h3>{!report.trend.length?<p>No activity for this period.</p>:<><div className="report-legend"><span>■ Sales</span><span>■ Expenses</span></div><div className="report-daily" role="img" aria-label="Daily sales and expense bar chart">{report.trend.map(day=><div className="report-day" key={day.date} title={`${day.date}: Sales ${peso(day.sales)}, expenses ${peso(day.expenses)}`}><div className="report-bars"><div className="report-sale" style={{height:`${Math.max(day.sales>0?2:0,day.sales/peak*100)}%`}}/><div className="report-expense" style={{height:`${Math.max(day.expenses>0?2:0,day.expenses/peak*100)}%`}}/></div><small>{day.date.slice(5)}</small></div>)}</div></>}</section>
+ <SalesTrends key={report.from + report.to} report={report}/>
  <div className="report-columns"><Ranking title="Sales by channel" items={report.salesBySource} property="amount" format={peso}/><Ranking title="Expenses by category" items={report.expensesByCategory} property="amount" format={peso}/><Ranking title="Top products by units sold" items={report.topProducts} property="quantity" format={n=>`${n} units`}/></div><section className="report-panel"><h3>How to interpret this report</h3>{report.notes.map(note=><p key={note}>• {note}</p>)}</section></>}
  </div>;
 }
