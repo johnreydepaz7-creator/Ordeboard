@@ -77,15 +77,15 @@ function ExpectedProducts({ products }) {
   </div>;
 }
 
-function MonthSummary({ month, currentMonth, label, weeks }) {
+function MonthSummary({ month, profiles }) {
+  const label = monthDate.format(Date.parse(month + '-01'));
+  const weeks = calendarWeeks(month, profiles);
   const days = weeks.flat().filter(Boolean);
   const total = projectedOrders(days);
   const average = orderCount(Math.round(total / days.length * 10) / 10);
-  const isNextMonth = month === shiftMonth(currentMonth, 1);
-  const monthLabel = isNextMonth ? 'Next month, ' + label + ',' : label;
   return <details className="forecast-month-summary">
     <summary>
-      <span>{monthLabel} {month < currentMonth ? 'has an estimated weekday-based average of' : 'is expected to have an average of'} <strong>{average} per day</strong>.</span>
+      <span>Next month, {label}, is expected to have an average of <strong>{average} per day</strong>.</span>
       <span className="forecast-expand-label">Month details <ChevronRight size={15} aria-hidden="true"/></span>
     </summary>
     <div className="forecast-summary-content">
@@ -224,6 +224,7 @@ export default function Forecast({ request, active = true }) {
 
   const currentMonth = result.today.slice(0, 7);
   const visibleMonth = month ?? currentMonth;
+  const nextMonth = shiftMonth(currentMonth, 1);
   const label = monthDate.format(Date.parse(visibleMonth + '-01'));
   const weeks = calendarWeeks(visibleMonth, result.weekdays);
 
@@ -241,7 +242,7 @@ export default function Forecast({ request, active = true }) {
     </header>
     {error && <p className="error" role="alert">{error}</p>}
     {result.status === 'ready'
-      ? <MonthSummary key={visibleMonth} month={visibleMonth} currentMonth={currentMonth} label={label} weeks={weeks}/>
+      ? <MonthSummary key={nextMonth} month={nextMonth} profiles={result.weekdays}/>
       : <p role="status">There isn’t enough order history to generate a forecast yet.</p>}
     <div className="forecast-calendar-header">
       <div>
