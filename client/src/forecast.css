@@ -1,8 +1,4 @@
 .forecast-layout {
-  --forecast-peak-bg: #f8e6c7;
-  --forecast-peak-ink: #684214;
-  --forecast-quiet-bg: #edf0f2;
-  --forecast-quiet-ink: #48565f;
   min-width: 0;
 }
 .forecast-toolbar,
@@ -80,6 +76,7 @@
 }
 .forecast-calendar td { padding: 0; }
 .forecast-calendar-day {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -94,7 +91,6 @@
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.forecast-calendar-day:hover { border-color: var(--ink); }
 .forecast-calendar-day time {
   display: grid;
   place-items: center;
@@ -109,14 +105,30 @@
   font-size: clamp(12px, 2vw, 18px);
   font-weight: 750;
 }
-.forecast-layout [data-status="busiest"] {
-  background: var(--forecast-peak-bg);
-  border-color: #d5ae73;
-  color: var(--forecast-peak-ink);
-}
 .forecast-layout [data-status="quiet"] {
-  background: var(--forecast-quiet-bg);
-  color: var(--forecast-quiet-ink);
+  background: #edf0f2;
+  border-color: #cbd4da;
+  color: #48565f;
+}
+.forecast-layout [data-status="low"] {
+  background: #e1f4ed;
+  border-color: #96c7b7;
+  color: #205548;
+}
+.forecast-layout [data-status="moderate"] {
+  background: #dceefa;
+  border-color: #96bfdf;
+  color: #214c70;
+}
+.forecast-layout [data-status="high"] {
+  background: #fcebc7;
+  border-color: #d7b365;
+  color: #69440d;
+}
+.forecast-layout [data-status="very-high"] {
+  background: #f9ded8;
+  border-color: #dca095;
+  color: #792f24;
 }
 .forecast-layout [data-status="unavailable"] {
   border-style: dashed;
@@ -131,6 +143,9 @@
   color: #fff;
   background: var(--accent);
 }
+.forecast-layout .forecast-calendar-day:hover { border-color: currentColor; }
+.forecast-busiest-icon { color: #68305d; flex-shrink: 0; }
+.forecast-calendar-day > .forecast-busiest-icon { position: absolute; top: 6px; right: 6px; }
 .forecast-legend {
   display: flex;
   flex-wrap: wrap;
@@ -142,7 +157,7 @@
   font-size: 12px;
 }
 .forecast-legend li { display: inline-flex; align-items: center; gap: 6px; }
-.forecast-legend li > span { width: 13px; height: 13px; border: 1px solid var(--line); border-radius: 3px; }
+.forecast-legend li > span { width: 13px; height: 13px; border: 1px solid; border-radius: 3px; }
 .forecast-legend li > .forecast-legend-today { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
 
 .forecast-day-dialog {
@@ -179,4 +194,5 @@
 @media (max-width: 520px) {
   .forecast-calendar-day { padding: 3px 4px; }
   .forecast-calendar-day time { min-width: 18px; min-height: 17px; font-size: 11px; }
+  .forecast-calendar-day > .forecast-busiest-icon { width: 10px; height: 10px; top: 4px; right: 3px; }
 }

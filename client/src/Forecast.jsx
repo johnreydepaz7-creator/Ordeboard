@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Flame, TrendingUp } from 'lucide-react';
 import './forecast.css';
 
 const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
@@ -9,6 +9,13 @@ const monthDate = new Intl.DateTimeFormat('en-PH', { month: 'long', year: 'numer
 const shortDate = new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const number = new Intl.NumberFormat('en-PH', { maximumFractionDigits: 1 });
 const orderCount = count => number.format(count) + (count === 1 ? ' order' : ' orders');
+const demandRanges = [
+  { level: 'quiet', max: 0 },
+  { level: 'low', max: 1 },
+  { level: 'moderate', max: 3 },
+  { level: 'high', max: 5 },
+  { level: 'very-high', max: Infinity },
+];
 
 function shiftMonth(month, offset) {
   const date = new Date(month + '-01T00:00:00Z');
@@ -103,11 +110,21 @@ function MonthSummary({ month, currentMonth, label, weeks }) {
   </details>;
 }
 
-function dayStatus(prediction, peak) {
-  if (!prediction) return 'unavailable';
-  if (prediction.expectedOrders === 0) return 'quiet';
-  if (prediction.expectedOrders === peak) return 'busiest';
-  return 'open';
+function rangeLabel(index) {
+  if (index === 0) return '0 (no orders expected)';
+  const min = (demandRanges[index - 1].max + 0.1).toFixed(1);
+  const { max } = demandRanges[index];
+  return Number.isFinite(max) ? `${min}–${max.toFixed(1)}` : `${min}+`;
+}
+
+function CalendarLegend({ ready }) {
+  return <ul className="forecast-legend" aria-label="Calendar legend">
+    {ready ? demandRanges.map(({ level }, index) => <li key={level}>
+      <span data-status={level} aria-hidden="true"/> {rangeLabel(index)}
+    </li>) : <li><span data-status="unavailable" aria-hidden="true"/> Estimate unavailable</li>}
+    <li><Flame className="forecast-busiest-icon" size={13} aria-hidden="true"/> Busiest days</li>
+    <li><span className="forecast-legend-today" aria-hidden="true"/> Today</li>
+  </ul>;
 }
 
 function ForecastCalendar({ weeks, today, label, onSelect }) {
@@ -119,10 +136,11 @@ function ForecastCalendar({ weeks, today, label, onSelect }) {
       {week.map((day, column) => {
         if (!day) return <td key={column}/>;
         const { date, time, dayOfMonth, prediction } = day;
-        const status = dayStatus(prediction, peak);
+        const status = prediction ? demandRanges.find(({ max }) => prediction.expectedOrders <= max).level : 'unavailable';
+        const isBusiest = peak > 0 && prediction?.expectedOrders === peak;
         const isToday = date === today;
         const estimate = prediction ? 'an average of ' + orderCount(prediction.expectedOrders) : 'estimate unavailable';
-        const peakLabel = status === 'busiest' ? ', busiest day' : '';
+        const peakLabel = isBusiest ? ', busiest day' : '';
         return <td key={column}>
           <button
             type="button"
@@ -134,6 +152,7 @@ function ForecastCalendar({ weeks, today, label, onSelect }) {
             onClick={() => onSelect(day)}
           >
             <time dateTime={date}>{dayOfMonth}</time>
+            {isBusiest && <Flame className="forecast-busiest-icon" size={13} aria-hidden="true"/>}
             <span>{prediction ? number.format(prediction.expectedOrders) : '—'}</span>
           </button>
         </td>;
@@ -235,12 +254,7 @@ export default function Forecast({ request, active = true }) {
       </div>
     </div>
     <ForecastCalendar weeks={weeks} today={result.today} label={label} onSelect={setSelectedDay}/>
-    <ul className="forecast-legend" aria-label="Calendar legend">
-      <li><span className="forecast-legend-today" aria-hidden="true"/> Today</li>
-      <li><span data-status="busiest" aria-hidden="true"/> Busiest days</li>
-      <li><span data-status="quiet" aria-hidden="true"/> No orders expected</li>
-      {result.status !== 'ready' && <li><span data-status="unavailable" aria-hidden="true"/> Estimate unavailable</li>}
-    </ul>
+    <CalendarLegend ready={result.status === 'ready'}/>
     {active && selectedDay && <DayDetails day={selectedDay} today={result.today} onClose={() => setSelectedDay(null)}/>}
   </section>;
 }
