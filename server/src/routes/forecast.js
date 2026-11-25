@@ -1,15 +1,10 @@
 import { Router } from 'express';
 import { requireAuth, ownerOnly } from '../middleware/auth.js';
-import Order from '../models/Order.js';
+import { forecastData, historicalMonths, monthDates, shiftDay } from '../demandHistory.js';
 
 const router = Router();
 router.use(requireAuth, ownerOnly);
-const DAY = 86400000;
-const HISTORY_DAYS = 56;
-const datePH = date => new Date(date.getTime() + 8 * 3600000).toISOString().slice(0, 10);
 const weekday = date => new Date(`${date}T00:00:00Z`).getUTCDay();
-const startPH = date => Date.parse(`${date}T00:00:00+08:00`);
-const shiftDay = (date, days) => datePH(new Date(startPH(date) + days * DAY));
 const periods = ['this-week', 'next-week', 'this-month', 'next-month'];
 
 function forecastRange(today, period, horizon) {
@@ -38,60 +33,42 @@ router.get('/', async (req, res, next) => {
   if (![7, 14].includes(horizon) || !/^\d+$/.test(String(req.query.days ?? '7'))) {
     return res.status(400).json({ message: 'Choose a 7-day or 14-day forecast.' });
   }
+  const month = req.query.month;
+  if (month !== undefined && (typeof month !== 'string' || !/^[1-9]\d{3}-(0[1-9]|1[0-2])$/.test(month))) {
+    return res.status(400).json({ message: 'Choose a valid calendar month.' });
+  }
   try {
-    // Last 56 *completed* Philippine calendar days, excluding the current incomplete day.
-    const today = datePH(new Date());
-    const todayStart = new Date(startPH(today));
-    const start = new Date(todayStart.getTime() - HISTORY_DAYS * DAY);
-    const orders = await Order.find({ status: 'Completed', paymentStatus: 'Paid',
-      paidCompletedAt: { $gte: start, $lt: todayStart } }).select('paidCompletedAt items.name items.quantity -_id').lean();
-    const weekdays = Array.from({ length: 7 }, () => ({ orders: 0, products: new Map() }));
-    const sellingDays = new Set();
-    const productNames = new Map();
-    for (const order of orders) {
-      const day = datePH(order.paidCompletedAt);
-      sellingDays.add(day);
-      const totals = weekdays[weekday(day)];
-      totals.orders++;
-      for (const item of order.items || []) {
-        const name = item.name?.trim();
-        const quantity = Number(item.quantity);
-        if (!name || !Number.isFinite(quantity) || quantity <= 0) continue;
-        const key = name.toLowerCase();
-        if (!productNames.has(key)) productNames.set(key, name);
-        totals.products.set(key, (totals.products.get(key) || 0) + quantity);
-      }
+    const { today, model, actuals, snapshots, archivedMonths, accuracy, replay } = await forecastData();
+    function dayForecast(date) {
+      const saved = snapshots.get(date);
+      const prediction = saved || (date >= today ? model.predict(date) : null);
+      const history = model.historyFor(date).map(row => ({ date: row.date, orders: row.orders,
+        forecast: snapshots.get(row.date)?.expectedOrders ?? null }));
+      return { date, prediction, saved: Boolean(saved), actual: actuals.get(date) ?? null, history };
     }
-    const insufficient = orders.length < 14 || sellingDays.size < 7;
-    const status = insufficient ? 'insufficient_data' : 'ready';
-    // The window contains eight of each weekday, including days with zero demand.
-    const weekdayAverage = total => Math.round(total * 10 / (HISTORY_DAYS / 7)) / 10;
-    const profiles = insufficient ? [] : weekdays.map(({ orders, products }) => ({
-      expectedOrders: weekdayAverage(orders),
-      products: [...products].map(([key, quantity]) => ({
-        name: productNames.get(key),
-        expectedUnits: weekdayAverage(quantity),
-      })),
-    }));
     res.set('Cache-Control', 'no-store');
     if (view === 'calendar') {
-      return res.json({ today, status, weekdays: profiles });
+      const visible = month || today.slice(0, 7);
+      const next = shiftDay(monthDates(today.slice(0, 7)).at(-1), 1).slice(0, 7);
+      const days = Object.fromEntries([...new Set([...monthDates(visible), ...monthDates(next)])]
+        .map(date => [date, dayForecast(date)]));
+      const reminders = [today, shiftDay(today, 7)].map(dayForecast).filter(day => day.history.length);
+      const historicalMonth = historicalMonths(actuals, next, today);
+      for (const row of historicalMonth.history) {
+        row.savedForecast = archivedMonths.get(row.year + next.slice(4)) ?? null;
+      }
+      return res.json({ today, month: visible, status: model.ready ? 'ready' : 'insufficient_data', days,
+        weekdays: model.weekdays, historicalMonth, accuracy, replay, reminders });
     }
-
     const { from, to } = forecastRange(today, period, horizon);
     const forecast = [];
-    if (!insufficient) {
-      for (let date = from; date <= to; date = shiftDay(date, 1)) {
-        forecast.push({ date, ...profiles[weekday(date)] });
-      }
+    let count = 0;
+    for (let date = from; date <= to; date = shiftDay(date, 1)) {
+      const { prediction } = dayForecast(date);
+      if (prediction) forecast.push({ date, ...prediction });
+      count++;
     }
-    res.json({
-      horizon: (startPH(to) - startPH(from)) / DAY + 1,
-      from,
-      to,
-      status,
-      forecast,
-    });
+    res.json({ horizon: count, from, to, status: forecast.length ? 'ready' : 'insufficient_data', forecast });
   } catch (error) { next(error); }
 });
 export default router;

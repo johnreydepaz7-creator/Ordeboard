@@ -24,6 +24,7 @@ import inventoryRoutes from './routes/inventory.js';
 import financeRoutes from './routes/finance.js';
 import reportRoutes from './routes/reports.js';
 import forecastRoutes from './routes/forecast.js';
+import { startForecastArchive } from './demandHistory.js';
 import dashboardRoutes from './routes/dashboard.js';
 
 // Step 1: Stop startup early if important configuration is missing.
@@ -143,6 +144,7 @@ app.use((error, _request, response, _next) => {
 
 // Step 4: Connect to the database BEFORE accepting incoming requests.
 await mongoose.connect(process.env.MONGODB_URI);
+startForecastArchive();
 if (!await User.exists({})) console.warn('No accounts detected. Restore a database backup or run the local create-owner command to initialize OrderBoard.');
 if (!emailIsConfigured()) console.warn('Account emails are disabled. See the email configuration in README.md.');
 const port = Number(process.env.PORT || 4000);

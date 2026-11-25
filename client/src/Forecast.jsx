@@ -23,7 +23,7 @@ function shiftMonth(month, offset) {
   return date.toISOString().slice(0, 7);
 }
 
-function calendarWeeks(month, profiles) {
+function calendarWeeks(month, records) {
   const start = Date.parse(month + '-01');
   const end = Date.parse(shiftMonth(month, 1) + '-01');
   const firstWeekday = (new Date(start).getUTCDay() + 6) % 7;
@@ -36,7 +36,7 @@ function calendarWeeks(month, profiles) {
       date: date.toISOString().slice(0, 10),
       time,
       dayOfMonth: date.getUTCDate(),
-      prediction: profiles[date.getUTCDay()],
+      ...records[date.toISOString().slice(0, 10)],
     });
   }
   const lastWeek = weeks.at(-1);
@@ -64,11 +64,11 @@ function ProductList({ products }) {
   )}</ul>;
 }
 
-function ExpectedProducts({ products }) {
+function ExpectedProducts({ products, title = 'Expected product demand' }) {
   const ranked = [...products].sort((a, b) => b.expectedUnits - a.expectedUnits || a.name.localeCompare(b.name));
   const remaining = ranked.slice(5);
   return <div className="forecast-expected-products">
-    <h4>Expected product demand</h4>
+    <h4>{title}</h4>
     {ranked.length ? <ProductList products={ranked.slice(0, 5)}/> : <p>No products expected.</p>}
     {remaining.length > 0 && <details>
       <summary>Show {remaining.length} more {remaining.length === 1 ? 'product' : 'products'}</summary>
@@ -77,19 +77,29 @@ function ExpectedProducts({ products }) {
   </div>;
 }
 
-function MonthSummary({ month, profiles }) {
+function MonthSummary({ month, records, historical, accuracy, replay }) {
   const label = monthDate.format(Date.parse(month + '-01'));
-  const weeks = calendarWeeks(month, profiles);
+  const weeks = calendarWeeks(month, records);
   const days = weeks.flat().filter(Boolean);
-  const total = projectedOrders(days);
-  const average = orderCount(Math.round(total / days.length * 10) / 10);
+  const ready = days.every(day => day.prediction);
+  const total = ready ? projectedOrders(days) : null;
+  const average = ready ? orderCount(Math.round(total / days.length * 10) / 10) : null;
   return <details className="forecast-month-summary">
     <summary>
-      <span>Next month, {label}, is expected to have an average of <strong>{average} per day</strong>.</span>
+      <span>Next month, {label}{ready ? <>, is expected to have an average of <strong>{average} per day</strong>.</> : ' · forecast unavailable'}
+        {historical.history.length > 0 && <> Past records show an average of <strong>{orderCount(historical.average)} for the full month</strong> across {historical.history.length} recorded {historical.history.length === 1 ? 'year' : 'years'}.</>}
+      </span>
       <span className="forecast-expand-label">Month details <ChevronRight size={15} aria-hidden="true"/></span>
     </summary>
     <div className="forecast-summary-content">
-      <p><strong>{orderCount(total)}</strong> estimated for the full month.</p>
+      {historical.history.length > 0 && <section>
+        <h4>Same month in past years</h4>
+        <p>{historical.history.length === 1 ? 'One complete month on record' : `Across ${historical.history.length} complete years, an average of ${orderCount(historical.average)}`}.</p>
+        <ul>{historical.history.map(row => <li key={row.year}>{row.year} · {orderCount(row.orders)} completed{row.savedForecast != null && ` · forecast ${orderCount(row.savedForecast)}`}</li>)}</ul>
+        <ExpectedProducts products={historical.products} title="Average units in those months"/>
+      </section>}
+      {!historical.history.length && <p>No complete prior occurrence of this month is recorded yet.</p>}
+      {ready && <><p><strong>{orderCount(total)}</strong> estimated for the full month.</p>
       <ExpectedProducts products={projectedProducts(days)}/>
       <div className="forecast-week-breakdown">
         <h4>Weekly demand</h4>
@@ -105,7 +115,9 @@ function MonthSummary({ month, profiles }) {
             <ExpectedProducts products={projectedProducts(weekDays)}/>
           </details>;
         })}
-      </div>
+      </div></>}
+      {accuracy && <p>Across {accuracy.samples} saved forecasts, the average daily error was {orderCount(accuracy.blended)} with the blend and {orderCount(accuracy.weekday)} with the weekday estimate.</p>}
+      {replay && <p>Historical replay over {replay.samples} days with same-date history: average error of {orderCount(replay.blended)} for the blend and {orderCount(replay.weekday)} for the weekday estimate.</p>}
     </div>
   </details>;
 }
@@ -117,11 +129,12 @@ function rangeLabel(index) {
   return Number.isFinite(max) ? `${min}–${max.toFixed(1)}` : `${min}+`;
 }
 
-function CalendarLegend({ ready }) {
+function CalendarLegend({ ready, unavailable }) {
   return <ul className="forecast-legend" aria-label="Calendar legend">
-    {ready ? demandRanges.map(({ level }, index) => <li key={level}>
+    {ready && demandRanges.map(({ level }, index) => <li key={level}>
       <span data-status={level} aria-hidden="true"/> {rangeLabel(index)}
-    </li>) : <li><span data-status="unavailable" aria-hidden="true"/> Estimate unavailable</li>}
+    </li>)}
+    {unavailable && <li><span data-status="unavailable" aria-hidden="true"/> Estimate unavailable</li>}
     <li><Flame className="forecast-busiest-icon" size={13} aria-hidden="true"/> Busiest days</li>
     <li><span className="forecast-legend-today" aria-hidden="true"/> Today</li>
   </ul>;
@@ -186,10 +199,16 @@ function DayDetails({ day, today, onClose }) {
       </header>
       {prediction ? <>
         {date < today
-          ? <p>Past orders point to an average of <strong>{orderCount(prediction.expectedOrders)}</strong> for this weekday.</p>
+          ? <p>The saved forecast expected an average of <strong>{orderCount(prediction.expectedOrders)}</strong>.</p>
           : <p>Based on past orders, we expect an average of <strong>{orderCount(prediction.expectedOrders)}</strong> on this day.</p>}
+        <p>Recent weekday average: {orderCount(prediction.weekdayAverage)} ({Math.round((1 - prediction.historicalWeight) * 100)}%).</p>
+        {prediction.years > 0 && <p>Same-date average: {orderCount(prediction.annualAverage)} across {prediction.years} prior {prediction.years === 1 ? 'year' : 'years'} ({Math.round(prediction.historicalWeight * 100)}%).</p>}
         <ExpectedProducts products={prediction.products}/>
-      </> : <p>There isn’t enough order history to show an estimate for this day.</p>}
+      </> : <p>{date < today ? 'No advance forecast was saved for this date.' : 'There isn’t enough recent order history for a forecast.'}</p>}
+      {day.actual && <p>Actual completed orders: <strong>{day.actual.orders}</strong>.</p>}
+      {day.history?.length > 0 && <section><h4>On this date in past years</h4>
+        <ul>{day.history.map(row => <li key={row.date}>{row.date.slice(0, 4)} · {orderCount(row.orders)} completed{row.forecast !== null && ` · forecast ${orderCount(row.forecast)}`}</li>)}</ul>
+      </section>}
     </div>
   </dialog>;
 }
@@ -206,13 +225,15 @@ export default function Forecast({ request, active = true }) {
     if (!active) return;
     let current = true;
     setError('');
-    request('/api/forecast?view=calendar', { refresh: requested.current }).then(
+    const query = new URLSearchParams({ view: 'calendar' });
+    if (month) query.set('month', month);
+    request('/api/forecast?' + query, { refresh: requested.current }).then(
       data => { if (current) setResult(data); },
       error => { if (current) setError(error.message); },
     );
     requested.current = true;
     return () => { current = false; };
-  }, [active, refresh, request]);
+  }, [active, month, refresh, request]);
 
   if (!result) return <section className="report-panel">
     <h3><TrendingUp size={19} aria-hidden="true"/> Demand Forecast</h3>
@@ -226,7 +247,7 @@ export default function Forecast({ request, active = true }) {
   const visibleMonth = month ?? currentMonth;
   const nextMonth = shiftMonth(currentMonth, 1);
   const label = monthDate.format(Date.parse(visibleMonth + '-01'));
-  const weeks = calendarWeeks(visibleMonth, result.weekdays);
+  const weeks = calendarWeeks(visibleMonth, result.days);
 
   function changeMonth(offset) {
     setMonth(previous => {
@@ -240,10 +261,16 @@ export default function Forecast({ request, active = true }) {
       <h3 id="demand-forecast-title"><TrendingUp size={19} aria-hidden="true"/> Demand Forecast</h3>
       <button className="status-button" type="button" onClick={() => setMonth(null)}>Today</button>
     </header>
-    {error && <p className="error" role="alert">{error}</p>}
-    {result.status === 'ready'
-      ? <MonthSummary key={nextMonth} month={nextMonth} profiles={result.weekdays}/>
-      : <p role="status">There isn’t enough order history to generate a forecast yet.</p>}
+    {error && <p className="error" role="alert">{error} <button type="button" className="status-button" onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
+    <MonthSummary key={nextMonth} month={nextMonth} records={result.days} historical={result.historicalMonth} accuracy={result.accuracy} replay={result.replay}/>
+    {result.reminders.map(day => <p key={day.date}>{day.date === result.today ? 'Today' : 'In one week'}, {shortDate.format(Date.parse(day.date))}:
+      {' '}{day.history.length === 1 ? `${orderCount(day.history[0].orders)} completed on this date in ${day.history[0].date.slice(0, 4)}` :
+        `an average of ${orderCount(day.history.reduce((sum, row) => sum + row.orders, 0) / day.history.length)} across ${day.history.length} prior years`}.{' '}
+      <button type="button" className="status-button" onClick={() => {
+        setMonth(day.date.slice(0, 7));
+        setSelectedDay({ ...day, time: Date.parse(day.date) });
+      }}>View day</button>
+    </p>)}
     <div className="forecast-calendar-header">
       <div>
         <h4 aria-live="polite">{label}</h4>
@@ -254,8 +281,10 @@ export default function Forecast({ request, active = true }) {
         <button type="button" className="status-button" aria-label="Next month" onClick={() => changeMonth(1)}><ChevronRight size={19} aria-hidden="true"/></button>
       </div>
     </div>
-    <ForecastCalendar weeks={weeks} today={result.today} label={label} onSelect={setSelectedDay}/>
-    <CalendarLegend ready={result.status === 'ready'}/>
+    {result.month === visibleMonth
+      ? <ForecastCalendar weeks={weeks} today={result.today} label={label} onSelect={setSelectedDay}/>
+      : !error && <p role="status">Loading month…</p>}
+    <CalendarLegend ready={weeks.flat().some(day => day?.prediction)} unavailable={weeks.flat().some(day => day && !day.prediction)}/>
     {active && selectedDay && <DayDetails day={selectedDay} today={result.today} onClose={() => setSelectedDay(null)}/>}
   </section>;
 }
