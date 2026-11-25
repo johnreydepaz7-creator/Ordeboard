@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, ownerOnly } from '../middleware/auth.js';
-import { forecastData, historicalMonths, monthDates, shiftDay } from '../demandHistory.js';
+import { confirmedBookings, forecastData, historicalMonths, monthDates, shiftDay } from '../demandHistory.js';
 
 const router = Router();
 router.use(requireAuth, ownerOnly);
@@ -38,18 +38,25 @@ router.get('/', async (req, res, next) => {
     return res.status(400).json({ message: 'Choose a valid calendar month.' });
   }
   try {
-    const { today, model, actuals, snapshots, archivedMonths, accuracy, replay } = await forecastData();
+    const { today, model, actuals, snapshots, archivedMonths, accuracy, replay, comparisons, errorRange } = await forecastData();
+    let bookings;
     function dayForecast(date) {
       const saved = snapshots.get(date);
       const prediction = saved || (date >= today ? model.predict(date) : null);
       const history = model.historyFor(date).map(row => ({ date: row.date, orders: row.orders,
         forecast: snapshots.get(row.date)?.expectedOrders ?? null }));
-      return { date, prediction, saved: Boolean(saved), actual: actuals.get(date) ?? null, history };
+      const likely = prediction?.recordedDays && errorRange && date === shiftDay(today, 1)
+        ? errorRange.map(offset => Math.max(0, Math.round(prediction.expectedOrders + offset))) : null;
+      return { date, prediction, likely, bookings: date >= today ? bookings?.get(date) || { orders: 0, products: [] } : null, saved: Boolean(saved), actual: actuals.get(date) ?? null, history };
     }
     res.set('Cache-Control', 'no-store');
     if (view === 'calendar') {
       const visible = month || today.slice(0, 7);
       const next = shiftDay(monthDates(today.slice(0, 7)).at(-1), 1).slice(0, 7);
+      const visibleDays = monthDates(visible);
+      const nextDays = monthDates(next);
+      const end = [visibleDays.at(-1), nextDays.at(-1)].sort().at(-1);
+      bookings = await confirmedBookings(today, end);
       const days = Object.fromEntries([...new Set([...monthDates(visible), ...monthDates(next)])]
         .map(date => [date, dayForecast(date)]));
       const reminders = [today, shiftDay(today, 7)].map(dayForecast).filter(day => day.history.length);
@@ -58,7 +65,7 @@ router.get('/', async (req, res, next) => {
         row.savedForecast = archivedMonths.get(row.year + next.slice(4)) ?? null;
       }
       return res.json({ today, month: visible, status: model.ready ? 'ready' : 'insufficient_data', days,
-        weekdays: model.weekdays, historicalMonth, accuracy, replay, reminders });
+        weekdays: model.weekdays, historicalMonth, accuracy, replay, comparisons, reminders });
     }
     const { from, to } = forecastRange(today, period, horizon);
     const forecast = [];

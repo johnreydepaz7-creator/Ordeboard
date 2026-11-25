@@ -77,7 +77,7 @@ function ExpectedProducts({ products, title = 'Expected product demand' }) {
   </div>;
 }
 
-function MonthSummary({ month, records, historical, accuracy, replay }) {
+function MonthSummary({ month, records, historical, accuracy, comparisons = [] }) {
   const label = monthDate.format(Date.parse(month + '-01'));
   const weeks = calendarWeeks(month, records);
   const days = weeks.flat().filter(Boolean);
@@ -98,6 +98,9 @@ function MonthSummary({ month, records, historical, accuracy, replay }) {
         <ul>{historical.history.map(row => <li key={row.year}>{row.year} · {orderCount(row.orders)} completed{row.savedForecast != null && ` · forecast ${orderCount(row.savedForecast)}`}</li>)}</ul>
         <ExpectedProducts products={historical.products} title="Average units in those months"/>
       </section>}
+          {historical.partial?.length > 0 && <section><h4>Partially recorded months</h4>
+        <ul>{historical.partial.map(row => <li key={row.year}>{row.year} · {row.recorded} of {row.total} days recorded · subtotal {orderCount(row.orders)}</li>)}</ul>
+      </section>}
       {!historical.history.length && <p>No complete prior occurrence of this month is recorded yet.</p>}
       {ready && <><p><strong>{orderCount(total)}</strong> estimated for the full month.</p>
       <ExpectedProducts products={projectedProducts(days)}/>
@@ -117,7 +120,14 @@ function MonthSummary({ month, records, historical, accuracy, replay }) {
         })}
       </div></>}
       {accuracy && <p>Across {accuracy.samples} saved forecasts, the average daily error was {orderCount(accuracy.blended)} with the blend and {orderCount(accuracy.weekday)} with the weekday estimate.</p>}
-      {replay && <p>Historical replay over {replay.samples} days with same-date history: average error of {orderCount(replay.blended)} for the blend and {orderCount(replay.weekday)} for the weekday estimate.</p>}
+      <details><summary>Compare historical forecast errors</summary>
+        <p>Average difference in orders per full period. Smaller values mean closer estimates. Each period starts after the day the estimate was made.</p>
+        {comparisons.length ? comparisons.map(row => <section key={row.period}>
+          <h4>{row.period === 'day' ? 'Next day' : row.period === 'week' ? 'Next calendar week' : 'Next calendar month'} · {row.samples} recorded {row.samples === 1 ? 'period' : 'periods'}</h4>
+          <ul>{['Recent weekdays only', '30% same-date history', '50% same-date history', '70% same-date history', 'Current blend'].map((label, i) =>
+            <li key={label}>{label} · {orderCount(row.errors[i])}</li>)}</ul>
+        </section>) : <p>More complete periods with prior-year records are needed for this comparison.</p>}
+      </details>
     </div>
   </details>;
 }
@@ -174,6 +184,22 @@ function ForecastCalendar({ weeks, today, label, onSelect }) {
   </table>;
 }
 
+function BookingComparison({ bookings, prediction }) {
+  const products = new Map((prediction?.products || []).map(item => [item.name.toLowerCase(), { ...item, booked: 0 }]));
+  for (const { name, quantity } of bookings.products) {
+    const key = name.toLowerCase();
+    products.set(key, { ...(products.get(key) || { name, expectedUnits: prediction ? 0 : null }), booked: quantity });
+  }
+  const difference = prediction ? prediction.expectedOrders - bookings.orders : null;
+  return <section><h4>Confirmed for this date</h4>
+    <p><strong>{orderCount(bookings.orders)} booked.</strong> {difference === null ? '' : difference < 0
+      ? 'Bookings already exceed the forecast.' : difference === 0 ? 'Bookings match the forecast.'
+      : `About ${orderCount(difference)} more would reach the forecast.`}</p>
+    {products.size > 0 && <><h4>Product quantities</h4><ul>{[...products.values()].sort((a,b) => b.booked - a.booked || b.expectedUnits - a.expectedUnits).map(item =>
+      <li key={item.name}><strong>{item.name}</strong> · {item.expectedUnits == null ? 'Estimate unavailable' : `${number.format(item.expectedUnits)} units expected on average`} · {item.booked} booked</li>)}</ul></>}
+  </section>;
+}
+
 function DayDetails({ day, today, onClose }) {
   const dialog = useRef(null);
   const { date, time, prediction } = day;
@@ -203,8 +229,11 @@ function DayDetails({ day, today, onClose }) {
           : <p>Based on past orders, we expect an average of <strong>{orderCount(prediction.expectedOrders)}</strong> on this day.</p>}
         <p>Recent weekday average: {orderCount(prediction.weekdayAverage)} ({Math.round((1 - prediction.historicalWeight) * 100)}%).</p>
         {prediction.years > 0 && <p>Same-date average: {orderCount(prediction.annualAverage)} across {prediction.years} prior {prediction.years === 1 ? 'year' : 'years'} ({Math.round(prediction.historicalWeight * 100)}%).</p>}
-        <ExpectedProducts products={prediction.products}/>
+         {prediction.recordedDays > 0 && <p>Based on {prediction.recordedDays} recorded {new Intl.DateTimeFormat('en-PH', { weekday: 'long', timeZone: 'UTC' }).format(time)}{prediction.recordedDays === 1 ? '' : 's'}. Observed demand ranged from {prediction.observedRange[0]} to {orderCount(prediction.observedRange[1])}.</p>}
+        {day.likely && <p>Likely range for tomorrow: <strong>{day.likely[0]}–{orderCount(day.likely[1])}</strong>, based on the middle 80% of past next-day forecast errors.</p>}
+        {!day.bookings && <ExpectedProducts products={prediction.products}/>}
       </> : <p>{date < today ? 'No advance forecast was saved for this date.' : 'There isn’t enough recent order history for a forecast.'}</p>}
+      {day.bookings && <BookingComparison bookings={day.bookings} prediction={prediction}/>}
       {day.actual && <p>Actual completed orders: <strong>{day.actual.orders}</strong>.</p>}
       {day.history?.length > 0 && <section><h4>On this date in past years</h4>
         <ul>{day.history.map(row => <li key={row.date}>{row.date.slice(0, 4)} · {orderCount(row.orders)} completed{row.forecast !== null && ` · forecast ${orderCount(row.forecast)}`}</li>)}</ul>
@@ -262,7 +291,7 @@ export default function Forecast({ request, active = true }) {
       <button className="status-button" type="button" onClick={() => setMonth(null)}>Today</button>
     </header>
     {error && <p className="error" role="alert">{error} <button type="button" className="status-button" onClick={() => setRefresh(value => value + 1)}>Retry</button></p>}
-    <MonthSummary key={nextMonth} month={nextMonth} records={result.days} historical={result.historicalMonth} accuracy={result.accuracy} replay={result.replay}/>
+    <MonthSummary key={nextMonth} month={nextMonth} records={result.days} historical={result.historicalMonth} accuracy={result.accuracy} comparisons={result.comparisons}/>
     {result.reminders.map(day => <p key={day.date}>{day.date === result.today ? 'Today' : 'In one week'}, {shortDate.format(Date.parse(day.date))}:
       {' '}{day.history.length === 1 ? `${orderCount(day.history[0].orders)} completed on this date in ${day.history[0].date.slice(0, 4)}` :
         `an average of ${orderCount(day.history.reduce((sum, row) => sum + row.orders, 0) / day.history.length)} across ${day.history.length} prior years`}.{' '}
