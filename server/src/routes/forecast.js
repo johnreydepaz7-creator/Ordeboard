@@ -27,8 +27,11 @@ function forecastRange(today, period, horizon) {
 }
 
 router.get('/', async (req, res, next) => {
-  const { period } = req.query;
+  const { period, view } = req.query;
   const horizon = Number(req.query.days ?? 7);
+  if (view !== undefined && view !== 'calendar') {
+    return res.status(400).json({ message: 'Choose a valid forecast view.' });
+  }
   if (period !== undefined && !periods.includes(period)) {
     return res.status(400).json({ message: 'Choose this week, next week, this month, or next month.' });
   }
@@ -38,7 +41,6 @@ router.get('/', async (req, res, next) => {
   try {
     // Last 56 *completed* Philippine calendar days, excluding the current incomplete day.
     const today = datePH(new Date());
-    const { from, to } = forecastRange(today, period, horizon);
     const todayStart = new Date(startPH(today));
     const start = new Date(todayStart.getTime() - HISTORY_DAYS * DAY);
     const orders = await Order.find({ status: 'Completed', paymentStatus: 'Paid',
@@ -61,28 +63,33 @@ router.get('/', async (req, res, next) => {
       }
     }
     const insufficient = orders.length < 14 || sellingDays.size < 7;
+    const status = insufficient ? 'insufficient_data' : 'ready';
+    // The window contains eight of each weekday, including days with zero demand.
+    const weekdayAverage = total => Math.round(total * 10 / (HISTORY_DAYS / 7)) / 10;
+    const profiles = insufficient ? [] : weekdays.map(({ orders, products }) => ({
+      expectedOrders: weekdayAverage(orders),
+      products: [...products].map(([key, quantity]) => ({
+        name: productNames.get(key),
+        expectedUnits: weekdayAverage(quantity),
+      })),
+    }));
+    res.set('Cache-Control', 'no-store');
+    if (view === 'calendar') {
+      return res.json({ today, status, weekdays: profiles });
+    }
+
+    const { from, to } = forecastRange(today, period, horizon);
     const forecast = [];
     if (!insufficient) {
-      // The window contains eight of each weekday, including days with zero demand.
-      const weekdayAverage = total => Math.round(total * 10 / (HISTORY_DAYS / 7)) / 10;
       for (let date = from; date <= to; date = shiftDay(date, 1)) {
-        const historical = weekdays[weekday(date)];
-        forecast.push({
-          date,
-          expectedOrders: weekdayAverage(historical.orders),
-          products: [...historical.products].map(([key, quantity]) => ({
-            name: productNames.get(key),
-            expectedUnits: weekdayAverage(quantity),
-          })),
-        });
+        forecast.push({ date, ...profiles[weekday(date)] });
       }
     }
-    res.set('Cache-Control', 'no-store');
     res.json({
       horizon: (startPH(to) - startPH(from)) / DAY + 1,
       from,
       to,
-      status: insufficient ? 'insufficient_data' : 'ready',
+      status,
       forecast,
     });
   } catch (error) { next(error); }

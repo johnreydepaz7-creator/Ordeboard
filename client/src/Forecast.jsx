@@ -1,74 +1,54 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ChevronRight, RefreshCcw, TrendingUp } from 'lucide-react';
+import { ChevronLeft, ChevronRight, TrendingUp } from 'lucide-react';
 import './forecast.css';
 
-const periods = {
-  '7-days': 'Next 7 days',
-  '14-days': 'Next 14 days',
-  'this-week': 'This week',
-  'next-week': 'Next week',
-  'this-month': 'This month',
-  'next-month': 'Next month',
-};
-const periodOptions = {
-  Daily: Object.keys(periods),
-  Weekly: ['this-week', 'next-week'],
-  Monthly: ['this-month', 'next-month'],
-};
+const weekdays = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 const dayMs = 86_400_000;
-const fullDate = new Intl.DateTimeFormat('en-PH', { weekday: 'long', month: 'long', day: 'numeric', timeZone: 'UTC' });
-const rangeDate = new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const fullDate = new Intl.DateTimeFormat('en-PH', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+const monthDate = new Intl.DateTimeFormat('en-PH', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+const shortDate = new Intl.DateTimeFormat('en-PH', { month: 'short', day: 'numeric', timeZone: 'UTC' });
 const number = new Intl.NumberFormat('en-PH', { maximumFractionDigits: 1 });
 const orderCount = count => number.format(count) + (count === 1 ? ' order' : ' orders');
 
-function rangeLabel({ from, to }) {
-  return rangeDate.formatRange(Date.parse(from), Date.parse(to));
+function shiftMonth(month, offset) {
+  const date = new Date(month + '-01T00:00:00Z');
+  date.setUTCMonth(date.getUTCMonth() + offset);
+  return date.toISOString().slice(0, 7);
 }
 
-function buildDays(result, range) {
-  const predictions = new Map(result.forecast.map(day => [day.date, day]));
-  const days = [];
-  for (let time = Date.parse(range.from); time <= Date.parse(range.to); time += dayMs) {
-    const date = new Date(time).toISOString().slice(0, 10);
-    days.push({ date, time, prediction: predictions.get(date) });
+function calendarWeeks(month, profiles) {
+  const start = Date.parse(month + '-01');
+  const end = Date.parse(shiftMonth(month, 1) + '-01');
+  const firstWeekday = (new Date(start).getUTCDay() + 6) % 7;
+  const weeks = [Array(firstWeekday).fill(null)];
+
+  for (let time = start; time < end; time += dayMs) {
+    if (weeks.at(-1).length === 7) weeks.push([]);
+    const date = new Date(time);
+    weeks.at(-1).push({
+      date: date.toISOString().slice(0, 10),
+      time,
+      dayOfMonth: date.getUTCDate(),
+      prediction: profiles[date.getUTCDay()],
+    });
   }
-  return days;
+  const lastWeek = weeks.at(-1);
+  while (lastWeek.length < 7) lastWeek.push(null);
+  return weeks;
 }
 
-function summarize(days) {
-  let projectedOrders = 0;
-  let busiest;
-  for (const { prediction } of days) {
-    if (prediction) {
-      projectedOrders += Math.round(prediction.expectedOrders * 10);
-      if (prediction.expectedOrders > (busiest?.expectedOrders ?? 0)) busiest = prediction;
-    }
-  }
-  return { projectedOrders: projectedOrders / 10, busiest };
+function projectedOrders(days) {
+  return days.reduce((sum, day) => sum + Math.round(day.prediction.expectedOrders * 10), 0) / 10;
 }
 
-function summarizeProducts(days) {
+function projectedProducts(days) {
   const totals = new Map();
-  for (const { prediction } of days) {
-    for (const { name, expectedUnits } of prediction?.products || []) {
+  for (const day of days) {
+    for (const { name, expectedUnits } of day.prediction.products) {
       totals.set(name, (totals.get(name) || 0) + Math.round(expectedUnits * 10));
     }
   }
   return [...totals].map(([name, units]) => ({ name, expectedUnits: units / 10 }));
-}
-
-function monthWeeks(days) {
-  const weeks = [];
-  for (const day of days) {
-    if (!weeks.length || new Date(day.time).getUTCDay() === 1) weeks.push([]);
-    weeks.at(-1).push(day);
-  }
-  return weeks.map(week => ({
-    from: week[0].date,
-    to: week.at(-1).date,
-    ...summarize(week),
-    hasEstimates: week.some(day => day.prediction),
-  }));
 }
 
 function ProductList({ products }) {
@@ -82,7 +62,7 @@ function ExpectedProducts({ products }) {
   const remaining = ranked.slice(5);
   return <div className="forecast-expected-products">
     <h4>Expected product demand</h4>
-    {ranked.length ? <ProductList products={ranked.slice(0, 5)}/> : <p>No product estimates for this period.</p>}
+    {ranked.length ? <ProductList products={ranked.slice(0, 5)}/> : <p>No products expected.</p>}
     {remaining.length > 0 && <details>
       <summary>Show {remaining.length} more {remaining.length === 1 ? 'product' : 'products'}</summary>
       <ProductList products={remaining}/>
@@ -90,162 +70,177 @@ function ExpectedProducts({ products }) {
   </div>;
 }
 
-function DayDetails({ day, panelRef }) {
-  const label = fullDate.format(day.time);
-  return <section className="forecast-day-details" ref={panelRef} tabIndex={-1} aria-labelledby="forecast-day-title">
-    <h4 id="forecast-day-title">{label}</h4>
-    {day.prediction ? <>
-      <p>Based on past orders, we expect an average of <strong>{orderCount(day.prediction.expectedOrders)}</strong> on {label}.</p>
-      <ExpectedProducts products={day.prediction.products}/>
-    </> : <p>No estimate available for this date.</p>}
-  </section>;
+function MonthSummary({ month, currentMonth, label, weeks }) {
+  const days = weeks.flat().filter(Boolean);
+  const total = projectedOrders(days);
+  const average = orderCount(Math.round(total / days.length * 10) / 10);
+  const isNextMonth = month === shiftMonth(currentMonth, 1);
+  const monthLabel = isNextMonth ? 'Next month, ' + label + ',' : label;
+  return <details className="forecast-month-summary">
+    <summary>
+      <span>{monthLabel} {month < currentMonth ? 'has an estimated weekday-based average of' : 'is expected to have an average of'} <strong>{average} per day</strong>.</span>
+      <span className="forecast-expand-label">Month details <ChevronRight size={15} aria-hidden="true"/></span>
+    </summary>
+    <div className="forecast-summary-content">
+      <p><strong>{orderCount(total)}</strong> estimated for the full month.</p>
+      <ExpectedProducts products={projectedProducts(days)}/>
+      <div className="forecast-week-breakdown">
+        <h4>Weekly demand</h4>
+        {weeks.map(week => {
+          const weekDays = week.filter(Boolean);
+          const first = weekDays[0];
+          const last = weekDays.at(-1);
+          return <details key={first.date}>
+            <summary>
+              <span>{shortDate.formatRange(first.time, last.time)}</span>
+              <strong>{orderCount(projectedOrders(weekDays))}</strong>
+            </summary>
+            <ExpectedProducts products={projectedProducts(weekDays)}/>
+          </details>;
+        })}
+      </div>
+    </div>
+  </details>;
 }
 
-function DayList({ days, busiest, selectedDate, onSelect }) {
-  return <table className="forecast-date-table">
-    <thead><tr><th scope="col">Date</th><th scope="col">Expected orders</th></tr></thead>
-    <tbody>{days.map(({ date, time, prediction }) => {
-      const isBusiest = busiest && prediction?.expectedOrders === busiest.expectedOrders;
-      return <tr key={date} className={isBusiest ? 'forecast-peak-row' : undefined}>
-        <th scope="row">
-          <button type="button" className="forecast-date-link" aria-pressed={date === selectedDate} onClick={() => onSelect(date)}>
-            {fullDate.format(time)}
+function dayStatus(prediction, peak) {
+  if (!prediction) return 'unavailable';
+  if (prediction.expectedOrders === 0) return 'quiet';
+  if (prediction.expectedOrders === peak) return 'busiest';
+  return 'open';
+}
+
+function ForecastCalendar({ weeks, today, label, onSelect }) {
+  const peak = Math.max(0, ...weeks.flat().map(day => day?.prediction?.expectedOrders ?? 0));
+
+  return <table className="forecast-calendar" aria-label={`${label} demand forecast`}>
+    <thead><tr>{weekdays.map(day => <th scope="col" key={day}>{day}</th>)}</tr></thead>
+    <tbody>{weeks.map((week, index) => <tr key={index}>
+      {week.map((day, column) => {
+        if (!day) return <td key={column}/>;
+        const { date, time, dayOfMonth, prediction } = day;
+        const status = dayStatus(prediction, peak);
+        const isToday = date === today;
+        const estimate = prediction ? 'an average of ' + orderCount(prediction.expectedOrders) : 'estimate unavailable';
+        const peakLabel = status === 'busiest' ? ', busiest day' : '';
+        return <td key={column}>
+          <button
+            type="button"
+            className="forecast-calendar-day"
+            data-status={status}
+            aria-haspopup="dialog"
+            aria-current={isToday ? 'date' : undefined}
+            aria-label={`${fullDate.format(time)}, ${estimate}${peakLabel}`}
+            onClick={() => onSelect(day)}
+          >
+            <time dateTime={date}>{dayOfMonth}</time>
+            <span>{prediction ? number.format(prediction.expectedOrders) : '—'}</span>
           </button>
-          {isBusiest && <small>Busiest forecast</small>}
-        </th>
-        <td>{prediction ? number.format(prediction.expectedOrders) : '—'}</td>
-      </tr>;
-    })}</tbody>
+        </td>;
+      })}
+    </tr>)}</tbody>
   </table>;
 }
 
+function DayDetails({ day, today, onClose }) {
+  const dialog = useRef(null);
+  const { date, time, prediction } = day;
+  const label = fullDate.format(time);
+
+  useEffect(() => {
+    if (!dialog.current.open) dialog.current.showModal();
+  }, []);
+
+  return <dialog
+    className="forecast-day-dialog"
+    ref={dialog}
+    aria-labelledby="forecast-day-title"
+    onClose={onClose}
+    onClick={event => {
+      if (event.target === event.currentTarget) event.currentTarget.close();
+    }}
+  >
+    <div className="forecast-dialog-content">
+      <header className="forecast-dialog-header">
+        <h3 id="forecast-day-title">{label}</h3>
+        <form method="dialog"><button className="status-button" type="submit">Close</button></form>
+      </header>
+      {prediction ? <>
+        {date < today
+          ? <p>Past orders point to an average of <strong>{orderCount(prediction.expectedOrders)}</strong> for this weekday.</p>
+          : <p>Based on past orders, we expect an average of <strong>{orderCount(prediction.expectedOrders)}</strong> on this day.</p>}
+        <ExpectedProducts products={prediction.products}/>
+      </> : <p>There isn’t enough order history to show an estimate for this day.</p>}
+    </div>
+  </dialog>;
+}
+
 export default function Forecast({ request, active = true }) {
-  const [view, setView] = useState('Daily');
-  const [period, setPeriod] = useState('7-days');
-  const [week, setWeek] = useState(null);
-  const [selectedDate, setSelectedDate] = useState(null);
+  const [month, setMonth] = useState(null);
+  const [selectedDay, setSelectedDay] = useState(null);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState('');
   const [refresh, setRefresh] = useState(0);
-  const [response, setResponse] = useState(null);
-  const detailsRef = useRef(null);
-  const previousRequest = useRef('');
+  const requested = useRef(false);
 
   useEffect(() => {
     if (!active) return;
-    const key = period.endsWith('-days') ? 'days=' + period.split('-')[0] : 'period=' + period;
-    const repeat = previousRequest.current === key;
-    previousRequest.current = key;
     let current = true;
-    request('/api/forecast?' + key, repeat ? { refresh: true } : {}).then(
-      result => { if (current) setResponse({ period, refresh, result }); },
-      error => { if (current) setResponse({ period, refresh, error: error.message }); },
+    setError('');
+    request('/api/forecast?view=calendar', { refresh: requested.current }).then(
+      data => { if (current) setResult(data); },
+      error => { if (current) setError(error.message); },
     );
+    requested.current = true;
     return () => { current = false; };
-  }, [active, period, refresh, request]);
+  }, [active, refresh, request]);
 
-  const current = response?.period === period && response.refresh === refresh ? response : null;
-  const result = current?.result;
-  const range = week || result;
-  const days = result ? buildDays(result, range) : [];
-  const summary = summarize(days);
-  const selectedDay = days.find(day => day.date === selectedDate) || days[0];
-  const tiedPeak = summary.busiest && days.filter(day => day.prediction?.expectedOrders === summary.busiest.expectedOrders).length > 1;
+  if (!result) return <section className="report-panel">
+    <h3><TrendingUp size={19} aria-hidden="true"/> Demand Forecast</h3>
+    {error ? <>
+      <p className="error" role="alert">{error}</p>
+      <button type="button" className="status-button" onClick={() => setRefresh(value => value + 1)}>Retry</button>
+    </> : <p role="status">Loading demand forecast…</p>}
+  </section>;
 
-  useEffect(() => {
-    if (active && selectedDate) detailsRef.current?.focus();
-  }, [active, selectedDate, view]);
+  const currentMonth = result.today.slice(0, 7);
+  const visibleMonth = month ?? currentMonth;
+  const label = monthDate.format(Date.parse(visibleMonth + '-01'));
+  const weeks = calendarWeeks(visibleMonth, result.weekdays);
 
-  function choosePeriod(value) {
-    if (value === 'selected-week') return;
-    setPeriod(value);
-    setWeek(null);
-    setSelectedDate(null);
+  function changeMonth(offset) {
+    setMonth(previous => {
+      const next = shiftMonth(previous ?? currentMonth, offset);
+      return next === currentMonth ? null : next;
+    });
   }
 
-  function chooseView(value) {
-    if (view === value) return;
-    setView(value);
-    if (value === 'Daily') return;
-    if (week && value === 'Weekly') return;
-    if (!periodOptions[value].includes(period)) choosePeriod(periodOptions[value][0]);
-    else if (week) {
-      setWeek(null);
-      setSelectedDate(null);
-    }
-  }
-
-  function showWeek(from, to) {
-    setWeek({ from, to });
-    setSelectedDate(null);
-    setView('Weekly');
-  }
-
-  function showBusiest(date) {
-    setView('Daily');
-    setSelectedDate(date);
-  }
-
-  return <div className="reports-layout forecast-layout">
-    <section className="report-panel">
-      <header className="forecast-toolbar">
-        <h3><TrendingUp size={19} aria-hidden="true"/> Demand Forecast</h3>
-        <div className="forecast-views" role="group" aria-label="Forecast view">
-          {Object.keys(periodOptions).map(option => <button
-            className="status-button" type="button" key={option} aria-pressed={view === option} onClick={() => chooseView(option)}
-          >{option}</button>)}
-        </div>
-      </header>
-      <div className="forecast-period">
-        <label>Forecast period
-          <select value={week ? 'selected-week' : period} onChange={event => choosePeriod(event.target.value)}>
-            {week && <option value="selected-week" disabled>{rangeLabel(week)}</option>}
-            {periodOptions[view].map(option => <option key={option} value={option}>{periods[option]}</option>)}
-          </select>
-        </label>
-        <button className="status-button" type="button" disabled={!current} onClick={() => setRefresh(refresh + 1)}>
-          <RefreshCcw size={15} aria-hidden="true"/> Refresh
-        </button>
+  return <section className="report-panel forecast-layout" aria-labelledby="demand-forecast-title">
+    <header className="forecast-toolbar">
+      <h3 id="demand-forecast-title"><TrendingUp size={19} aria-hidden="true"/> Demand Forecast</h3>
+      <button className="status-button" type="button" onClick={() => setMonth(null)}>Today</button>
+    </header>
+    {error && <p className="error" role="alert">{error}</p>}
+    {result.status === 'ready'
+      ? <MonthSummary key={visibleMonth} month={visibleMonth} currentMonth={currentMonth} label={label} weeks={weeks}/>
+      : <p role="status">There isn’t enough order history to generate a forecast yet.</p>}
+    <div className="forecast-calendar-header">
+      <div>
+        <h4 aria-live="polite">{label}</h4>
+        <p>Average expected orders per day · Philippine time</p>
       </div>
-      {!current && <p role="status">Calculating forecast…</p>}
-      {current?.error && <p className="error" role="alert">{current.error}</p>}
-    </section>
-
-    {result && <>
-      <section className="report-panel" aria-labelledby="forecast-outlook-title">
-        <h3 id="forecast-outlook-title">{view} outlook <span className="forecast-range">{rangeLabel(range)} · Philippine time</span></h3>
-        {summary.busiest && <div className="forecast-peak">
-          <div>
-            <strong>Busiest expected day</strong>
-            <p>Based on past orders, {fullDate.format(Date.parse(summary.busiest.date))} {tiedPeak
-              ? 'is one of the busiest expected days in this period'
-              : 'is expected to be the busiest day in this period'
-            }, with an average of <strong>{orderCount(summary.busiest.expectedOrders)}</strong>.</p>
-          </div>
-          <button type="button" className="status-button" onClick={() => showBusiest(summary.busiest.date)}>
-            View day <ChevronRight size={15} aria-hidden="true"/>
-          </button>
-        </div>}
-        {result.status === 'ready' ? <>
-          <dl className="forecast-metrics"><div><dt>Estimated total orders</dt><dd>{number.format(summary.projectedOrders)}</dd></div></dl>
-          {view !== 'Daily' && <ExpectedProducts products={summarizeProducts(days)}/>}
-        </> : <p>There isn’t enough order history to generate a forecast yet.</p>}
-      </section>
-
-      {view === 'Monthly' ? <section className="report-panel">
-        <h3>Weeks in this month</h3>
-        <table className="forecast-date-table">
-          <thead><tr><th scope="col">Week</th><th scope="col">Expected orders</th></tr></thead>
-          <tbody>{monthWeeks(days).map(item => <tr key={item.from}>
-            <th scope="row">
-              <button className="forecast-date-link" type="button" onClick={() => showWeek(item.from, item.to)}>{rangeLabel(item)}</button>
-            </th>
-            <td>{item.hasEstimates ? number.format(item.projectedOrders) : '—'}</td>
-          </tr>)}</tbody>
-        </table>
-      </section> : <section className="report-panel">
-        <h3>Daily forecast</h3>
-        {selectedDay && <DayDetails day={selectedDay} panelRef={detailsRef}/>}
-        <DayList days={days} busiest={summary.busiest} selectedDate={selectedDay?.date} onSelect={setSelectedDate}/>
-      </section>}
-    </>}
-  </div>;
+      <div className="forecast-month-buttons" role="group" aria-label="Change forecast month">
+        <button type="button" className="status-button" aria-label="Previous month" onClick={() => changeMonth(-1)}><ChevronLeft size={19} aria-hidden="true"/></button>
+        <button type="button" className="status-button" aria-label="Next month" onClick={() => changeMonth(1)}><ChevronRight size={19} aria-hidden="true"/></button>
+      </div>
+    </div>
+    <ForecastCalendar weeks={weeks} today={result.today} label={label} onSelect={setSelectedDay}/>
+    <ul className="forecast-legend" aria-label="Calendar legend">
+      <li><span className="forecast-legend-today" aria-hidden="true"/> Today</li>
+      <li><span data-status="busiest" aria-hidden="true"/> Busiest days</li>
+      <li><span data-status="quiet" aria-hidden="true"/> No orders expected</li>
+      {result.status !== 'ready' && <li><span data-status="unavailable" aria-hidden="true"/> Estimate unavailable</li>}
+    </ul>
+    {active && selectedDay && <DayDetails day={selectedDay} today={result.today} onClose={() => setSelectedDay(null)}/>}
+  </section>;
 }
