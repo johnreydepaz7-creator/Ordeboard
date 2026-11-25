@@ -77,7 +77,7 @@ The interface is a responsive website, not a native iOS application. It works in
 - Status transitions remain enforced on the **server**, not merely by hiding frontend buttons.
 - For production, perform a deliberate security review (HTTPS, CORS/cookie settings, CSRF protections, secret management, access policies, backups, audit logging and automated tests). Local demo configuration must not be exposed to the public internet without this work.
 - Forecasts are estimates based on qualifying historical paid and completed orders. They are not guaranteed.
-- An offline warning is available; the app does **not** accept offline submissions or cache sensitive business/customer data for offline use.
+- On Render, open OrderBoard and sign in while connected. Once the browser installs the app files, the signed-in tab can reload offline and save order drafts on that device. Customer details entered in drafts stay in that browser until submission. After reconnecting, open **Orders & Reservations → Review draft → Submit draft**. The server confirms each submission and recognizes retries. A new browser session or an expired login requires an online sign-in to access saved drafts.
 
 See `LEAN_UI_CHANGELOG.md` for the latest design changes and a targeted regression checklist. See `UI_REFRESH_NOTES.md` for the previous UI update and broader manual tests. `PHASE3_NOTES.md`, `PHASE4_NOTES.md`, and `PHASE5_NOTES.md` are historical phase-specific references.
 

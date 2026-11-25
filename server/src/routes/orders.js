@@ -48,19 +48,39 @@ router.get('/', async (req, res, next) => {
 });
 router.post('/', async (req, res, next) => {
   try {
+    if (!['owner', 'staff'].includes(req.user.role)) return res.status(403).json({ message: 'Order access requires an Owner or Staff account.' });
+    const draftOwner = req.get('Draft-Account');
+    if (draftOwner !== undefined && draftOwner !== req.user.id) {
+      return res.status(403).json({ message: 'Sign in to the account that saved this draft before submitting.' });
+    }
+    const requestId = req.get('Idempotency-Key');
+    if (!requestId || !/^[a-zA-Z0-9-]{12,80}$/.test(requestId)) return res.status(400).json({ message: 'Missing or invalid submission key.' });
+    const existingOrder = async () => {
+      const prior = await Order.findOne({ requestId });
+      if (!prior) return false;
+      if (String(prior.createdBy) !== req.user.id) {
+        res.status(409).json({ message: 'This submission key is already in use.' });
+      } else {
+        res.json({ order: mapOrder(prior), duplicatePrevented: true });
+      }
+      return true;
+    };
+    // Resolve retries before revalidating time-sensitive fields.
+    if (await existingOrder()) return;
     const parsed = fields.strict().safeParse(req.body);
     if (!parsed.success) return res.status(400).json({ message: 'Enter a unit price greater than ₱0.00 for every product, and check all required order fields.' });
     const data = parsed.data;
     if (data.fulfillmentAt && (new Date(data.fulfillmentAt).getTime() < Date.now()-60_000 || new Date(data.fulfillmentAt).getTime()>Date.now()+365*86400000)) return res.status(400).json({ message: 'Choose a fulfillment date within the next year.' });
-    const requestId = req.get('Idempotency-Key');
-    if (!requestId || !/^[a-zA-Z0-9-]{12,80}$/.test(requestId)) return res.status(400).json({message:'Missing or invalid submission key.'});
-    const prior = await Order.findOne({ requestId });
-    if (prior) return res.json({ order: mapOrder(prior), duplicatePrevented: true });
     const total = roundMoney(data.items.reduce((sum, line) => sum + line.quantity * line.unitPrice, 0));
     if (!Number.isSafeInteger(Math.round(total * 100))) return res.status(400).json({ message: 'Order total is too large.' });
-    const order = await Order.create({ ...data, total, requestId, createdBy: req.user.id, updatedBy: req.user.id });
-    res.status(201).json({ order: mapOrder(order) });
-  } catch (error) { if (error.code === 11000) return res.status(409).json({message:'This order has already been submitted. Refresh to view it.'}); next(error); }
+    try {
+      const order = await Order.create({ ...data, total, requestId, createdBy: req.user.id, updatedBy: req.user.id });
+      res.status(201).json({ order: mapOrder(order) });
+    } catch (error) {
+      // Another request may have inserted the order after the first lookup.
+      if (error.code !== 11000 || !await existingOrder()) throw error;
+    }
+  } catch (error) { next(error); }
 });
 // Edit business details; current status is unchanged and requires a separate route.
 router.patch('/:id', async (req, res, next) => {

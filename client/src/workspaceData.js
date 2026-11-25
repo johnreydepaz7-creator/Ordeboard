@@ -25,11 +25,19 @@ async function fetchFromServer(path, options) {
       ...options,
     });
   } catch {
-    throw new Error('Cannot connect to the server. Check your connection.');
+    if (!path.startsWith('/api/auth/')) window.dispatchEvent(new Event('orderboard:host-unavailable'));
+    throw Object.assign(new Error('Cannot connect to the server. Check your connection.'), { unavailable: true });
+  }
+  if ([502, 503, 504].includes(response.status) && !path.startsWith('/api/auth/')) {
+    window.dispatchEvent(new Event('orderboard:host-unavailable'));
   }
   let data;
   try { data = await response.json(); }
-  catch { throw new Error('The server sent an invalid response. Please retry.'); }
+  catch {
+    throw Object.assign(new Error('The server sent an invalid response. Please retry.'), {
+      status: response.status, unavailable: response.ok || response.status >= 500,
+    });
+  }
   if (!response.ok) {
     // Don't keep showing a prior account's data if its session has expired.
     if (response.status === 401 && !path.startsWith('/api/auth/')) {
@@ -39,7 +47,7 @@ async function fetchFromServer(path, options) {
         detail: { message: data.message || 'Session ended. Please sign in again.' },
       }));
     }
-    throw new Error(data.message || 'Request failed');
+    throw Object.assign(new Error(data.message || 'Request failed'), { status: response.status, unavailable: response.status >= 500 });
   }
   return data;
 }

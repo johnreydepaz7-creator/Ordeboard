@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import './styles.css';
 import { request, prepareWorkspace, clearWorkspaceCache } from './workspaceData.js';
+import { accountChangeKey, browserSignedOut, changeBrowserAccount, forgetOfflineSession, readOfflineSession, rememberOfflineSession } from './offlineOrders.js';
 import Orders from './Orders.jsx';
 import Reservations from './Reservations.jsx';
 import CakeProduction from './CakeProduction.jsx';
@@ -21,21 +22,13 @@ import Dashboard from './Dashboard.jsx';
 let startupTask = null;
 function restoreUserSession() {
   if (!startupTask) {
-    startupTask = request('/api/auth/me').then(async result => {
-      clearWorkspaceCache();
-      await Promise.race([
-        prepareWorkspace(result.user),
-        new Promise(resolve => setTimeout(resolve, 7000)),
-      ]);
-      return result.user;
-    });
+    startupTask = request('/api/auth/me', { signal: AbortSignal.timeout(8000) });
   }
   return startupTask;
 }
 // These sections will be implemented in later development phases.
 const navigation=[['Dashboard',LayoutDashboard],['Orders & Reservations',ClipboardList],['Cake Production',Cake],['Schedules',CalendarDays],['Inventory',Package],['Sales & Expenses',Wallet],['Reports & Analytics',BarChart3],['Demand Forecast',BarChart3]];
-function ConnectivityNotice(){const [online,setOnline]=useState(navigator.onLine);useEffect(()=>{const on=()=>setOnline(true),off=()=>setOnline(false);window.addEventListener('online',on);window.addEventListener('offline',off);return ()=>{window.removeEventListener('online',on);window.removeEventListener('offline',off);};},[]);return !online?<div role='alert' className='error' style={{padding:'12px',marginBottom:'12px'}}>You are offline. Server-backed actions require a connection. No financial or customer data is stored for offline use.</div>:null;}
-function OrdersAndReservations({ request, intent, active, navigate }) {
+function OrdersAndReservations({ request, intent, active, navigate, accountId, offline }) {
   const [tab, setTab] = useState(intent?.tab || 'orders');
   const [activeIntent, setActiveIntent] = useState(intent);
   useEffect(() => {
@@ -44,15 +37,16 @@ function OrdersAndReservations({ request, intent, active, navigate }) {
       setActiveIntent(intent);
     }
   }, [intent?.nonce]);
+  useEffect(() => { if (offline) setTab('orders'); }, [offline]);
   function changeTab(nextTab) { setTab(nextTab); setActiveIntent(null); }
   return <div>
-    <div className="ob-tabs" role="tablist" aria-label="Orders and reservations">
+    {!offline && <div className="ob-tabs" role="tablist" aria-label="Orders and reservations">
       <button type="button" role="tab" aria-selected={tab === 'orders'} className={tab === 'orders' ? 'selected' : ''} onClick={() => changeTab('orders')}>Orders</button>
       <button type="button" role="tab" aria-selected={tab === 'reservations'} className={tab === 'reservations' ? 'selected' : ''} onClick={() => changeTab('reservations')}>Reservations</button>
-    </div>
+    </div>}
     {/* Keep both lists in memory. The inactive tab does not make a new fetch. */}
-    <div hidden={tab !== 'orders'} className="workspace-pane"><Orders request={request} navigate={navigate} intent={tab === 'orders' ? activeIntent : null} active={active && tab === 'orders'}/></div>
-    <div hidden={tab !== 'reservations'} className="workspace-pane"><Reservations request={request} navigate={navigate} intent={tab === 'reservations' ? activeIntent : null} active={active && tab === 'reservations'}/></div>
+    <div hidden={!offline && tab !== 'orders'} className="workspace-pane"><Orders request={request} navigate={navigate} intent={tab === 'orders' ? activeIntent : null} active={active && (offline || tab === 'orders')} accountId={accountId} offline={offline}/></div>
+    {!offline && <div hidden={tab !== 'reservations'} className="workspace-pane"><Reservations request={request} navigate={navigate} intent={tab === 'reservations' ? activeIntent : null} active={active && tab === 'reservations'}/></div>}
   </div>;
 }
 function StaffHistoryDialog({ person, onClose }) {
@@ -268,6 +262,11 @@ function App() {
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState('Dashboard');
   const [menu, setMenu] = useState(false);
+  const [online, setOnline] = useState(navigator.onLine);
+  const [offlineSession, setOfflineSession] = useState(false);
+  const [sessionExpiry, setSessionExpiry] = useState(null);
+  const [reconnectAttempt, setReconnectAttempt] = useState(0);
+  const offline = !online || offlineSession;
   // Save only a display preference. No account or customer data goes to local storage.
   const [compactNav, setCompactNav] = useState(() => {
     try { return window.localStorage.getItem('ob-compact-nav') === '1'; }
@@ -282,6 +281,23 @@ function App() {
   }
   const [intent, setIntent] = useState(null);
 
+  function applySession(result) {
+    rememberOfflineSession(result);
+    setSessionExpiry(result.expiresAt);
+    setUser(result.user);
+  }
+
+  function endLocalSession(message = '') {
+    forgetOfflineSession();
+    clearWorkspaceCache();
+    setUser(null);
+    setSessionExpiry(null);
+    setOfflineSession(false);
+    setPage('Dashboard');
+    setIntent(null);
+    setError(message);
+  }
+
   // A new intent opens a specific workflow even if that page is already visible.
   function navigate(nextPage, options = {}) {
     setIntent({ ...options, nonce: crypto.randomUUID() });
@@ -294,9 +310,27 @@ function App() {
     let mounted = true;
     async function restoreSession() {
       try {
-        const restoredUser = await restoreUserSession();
-        if (mounted) setUser(restoredUser);
-      } catch { /* Not signed in: display the login form. */ }
+        if (browserSignedOut()) return;
+        if (!navigator.onLine) throw { unavailable: true };
+        const result = await restoreUserSession();
+        if (mounted && !browserSignedOut()) {
+          clearWorkspaceCache();
+          prepareWorkspace(result.user);
+          applySession(result);
+        }
+      } catch (err) {
+        if (!mounted) return;
+        const saved = err.unavailable && readOfflineSession();
+        if (saved) {
+          setUser(saved.user);
+          setSessionExpiry(saved.expiresAt);
+          setPage('Orders & Reservations');
+          setOfflineSession(true);
+        } else {
+          forgetOfflineSession();
+          if (err.unavailable) setError('Connect to OrderBoard to sign in and open your drafts.');
+        }
+      }
       finally { if (mounted) setChecking(false); }
     }
     // People arriving from a reset email must see the reset form immediately.
@@ -312,15 +346,61 @@ function App() {
   // Server-side session invalidation also clears every retained page's data.
   useEffect(() => {
     function sessionExpired(event) {
-      clearWorkspaceCache();
-      setUser(null);
-      setPage('Dashboard');
-      setIntent(null);
-      setError(event.detail?.message || 'Session ended. Sign in again.');
+      endLocalSession(event.detail?.message || 'Session ended. Sign in again.');
     }
     window.addEventListener('orderboard:session-expired', sessionExpired);
     return () => window.removeEventListener('orderboard:session-expired', sessionExpired);
   }, []);
+
+  useEffect(() => {
+    function handleOnline() { setOnline(true); }
+    function handleOffline() { setOnline(false); setOfflineSession(true); }
+    function handleHostUnavailable() { setOfflineSession(true); }
+    function handleAccountChange(event) {
+      if (event.key === accountChangeKey || event.key === null) endLocalSession('Sign in to open your account’s drafts.');
+    }
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    window.addEventListener('orderboard:host-unavailable', handleHostUnavailable);
+    window.addEventListener('storage', handleAccountChange);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('orderboard:host-unavailable', handleHostUnavailable);
+      window.removeEventListener('storage', handleAccountChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!sessionExpiry) return;
+    const timer = setTimeout(() => endLocalSession('Session expired. Please sign in again to open your drafts.'), Math.max(0, Date.parse(sessionExpiry) - Date.now()));
+    return () => clearTimeout(timer);
+  }, [sessionExpiry]);
+
+  useEffect(() => {
+    if (!user || !offlineSession || !online) return;
+    let active = true;
+    let retryTimer;
+    async function verifySession() {
+      try {
+        const result = await request('/api/auth/me', { signal: AbortSignal.timeout(8000) });
+        if (!active) return;
+        if (result.user.id !== user.id || browserSignedOut()) {
+          endLocalSession('Sign in to the account that saved your drafts.');
+          return;
+        }
+        applySession(result);
+        setPage('Orders & Reservations');
+        setOfflineSession(false);
+      } catch (err) {
+        if (!active) return;
+        if (err.unavailable) retryTimer = setTimeout(verifySession, 15_000);
+        else endLocalSession('Session ended. Please sign in again to open your drafts.');
+      }
+    }
+    verifySession();
+    return () => { active = false; clearTimeout(retryTimer); };
+  }, [user?.id, online, offlineSession, reconnectAttempt]);
 
   // Keyboard shortcuts are ignored while typing in forms.
   // Alt+1 = dashboard; Alt+2 = orders; Alt+3 = production; Alt+N = new order.
@@ -352,12 +432,10 @@ function App() {
     setBusy(true); setError('');
     try {
       const result = await request('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+      changeBrowserAccount(true);
       clearWorkspaceCache();
-      await Promise.race([
-        prepareWorkspace(result.user),
-        new Promise(resolve => setTimeout(resolve, 7000)),
-      ]);
-      setUser(result.user); setPassword(''); setPage('Dashboard');
+      prepareWorkspace(result.user);
+      applySession(result); setOfflineSession(!navigator.onLine); setPassword(''); setPage('Dashboard');
     } catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
@@ -416,8 +494,10 @@ function App() {
     finally { setBusy(false); }
   }
   async function logout() {
+    changeBrowserAccount(false);
+    endLocalSession();
     try { await request('/api/auth/logout', { method: 'POST' }); }
-    finally { clearWorkspaceCache(); setUser(null); setPage('Dashboard'); setIntent(null); }
+    catch { /* The workspace stays locked locally even when the server is unavailable. */ }
   }
 
   if (checking) return <div className="center"><div className="loading-brand"><div className="symbol">OB</div><p>Opening OrderBoard…</p></div></div>;
@@ -492,7 +572,8 @@ function App() {
     </section>
   </main>;
 
-  const permitted = [...navigation, ...(user.role === 'owner' ? [['Staff Accounts', Users]] : []), ['Account Security', ShieldCheck]]
+  const displayedPage = offline ? 'Orders & Reservations' : page;
+  const permitted = (offline ? [navigation[1]] : [...navigation, ...(user.role === 'owner' ? [['Staff Accounts', Users]] : []), ['Account Security', ShieldCheck]])
     .filter(([label]) => user.role === 'owner' || !['Sales & Expenses', 'Reports & Analytics', 'Demand Forecast'].includes(label));
   const descriptions = {
     Dashboard: 'Today’s priorities at a glance.',
@@ -509,7 +590,7 @@ function App() {
   return <div className={"app" + (compactNav ? " compact-nav" : "")}>
     <aside className={'sidebar ' + (menu ? 'open' : '')}>
       <div className="sidebar-brand"><div className="symbol">OB</div><div><strong>OrderBoard</strong></div><button type="button" className="sidebar-close" aria-label="Close menu" onClick={() => setMenu(false)}><X size={20}/></button></div>
-      <nav aria-label="Main navigation">{permitted.map(([label, Icon], index) => <React.Fragment key={label}><button type="button" className={page === label ? 'active' : ''} aria-current={page === label ? 'page' : undefined} onClick={() => navigate(label)} aria-label={label} title={label}><Icon size={18}/><span>{label}</span>{page === label && <span className="nav-selected"/>}</button></React.Fragment>)}</nav>
+      <nav aria-label="Main navigation">{permitted.map(([label, Icon]) => <React.Fragment key={label}><button type="button" className={displayedPage === label ? 'active' : ''} aria-current={displayedPage === label ? 'page' : undefined} onClick={() => navigate(label)} aria-label={label} title={label}><Icon size={18}/><span>{label}</span>{displayedPage === label && <span className="nav-selected"/>}</button></React.Fragment>)}</nav>
       <div className="sidebar-bottom"><div className="userpic">{user.name.slice(0,1).toUpperCase()}</div><div className="userlabel"><strong>{user.name}</strong><small>{user.role === 'owner' ? 'Owner / Administrator' : 'Staff member'}</small></div><button type="button" title="Log out" aria-label="Log out" onClick={logout}><LogOut size={19}/></button></div>
     </aside>
     <main className="main">
@@ -517,14 +598,19 @@ function App() {
         <div className="topbar-trail">
           <button type="button" className="hamburger" aria-label="Open menu" onClick={() => setMenu(true)}><Menu size={21}/></button>
           <button type="button" className="collapse-toggle" aria-label={compactNav ? 'Expand navigation' : 'Collapse navigation'} title={compactNav ? 'Expand navigation (Alt+B)' : 'Collapse navigation (Alt+B)'} onClick={toggleNavigation}>{compactNav ? <PanelLeftOpen size={19}/> : <PanelLeftClose size={19}/>}</button>
-          <h1>{page}</h1>
+          <h1>{offline ? 'Order drafts' : page}</h1>
         </div>
       </header>
-      <div className="content"><ConnectivityNotice/>
+      <div className="content">
+        {offline && <div role="status" className="error" style={{padding:'12px',marginBottom:'12px'}}>
+          {online ? 'Waiting for OrderBoard to verify your session.' : 'You are offline.'} You can save order drafts on this browser. Submitting drafts and using the rest of the workspace require a connection.
+          {online && <button type="button" className="status-button" onClick={() => setReconnectAttempt(value => value + 1)}>Check connection</button>}
+        </div>}
         {/* Pages are loaded once per signed-in session. Switching sections only
             changes visibility; page state and the first results stay in memory. */}
+        <section className="workspace-pane" hidden={displayedPage !== 'Orders & Reservations'}><OrdersAndReservations key={user.id} request={request} navigate={navigate} intent={displayedPage === 'Orders & Reservations' ? intent : null} active={displayedPage === 'Orders & Reservations'} accountId={user.id} offline={offline}/></section>
+        {!offline && <>
         <section className="workspace-pane" hidden={page !== 'Dashboard'}><Dashboard request={request} navigate={navigate} user={user} active={page === 'Dashboard'}/></section>
-        <section className="workspace-pane" hidden={page !== 'Orders & Reservations'}><OrdersAndReservations request={request} navigate={navigate} intent={page === 'Orders & Reservations' ? intent : null} active={page === 'Orders & Reservations'}/></section>
         <section className="workspace-pane" hidden={page !== 'Cake Production'}><CakeProduction request={request} navigate={navigate} intent={page === 'Cake Production' ? intent : null} active={page === 'Cake Production'}/></section>
         <section className="workspace-pane" hidden={page !== 'Schedules'}><Schedule request={request} navigate={navigate} active={page === 'Schedules'}/></section>
         <section className="workspace-pane" hidden={page !== 'Inventory'}><Inventory request={request} active={page === 'Inventory'}/></section>
@@ -534,7 +620,8 @@ function App() {
           <section className="workspace-pane" hidden={page !== 'Demand Forecast'}><Forecast request={request} active={page === 'Demand Forecast'}/></section>
           <section className="workspace-pane" hidden={page !== 'Staff Accounts'}><StaffManager active={page === 'Staff Accounts'}/></section>
         </>}
-        <section className="workspace-pane" hidden={page !== 'Account Security'}><SecurityCenter active={page === 'Account Security'} onSignedOut={() => { clearWorkspaceCache(); setUser(null); setPage('Dashboard'); }}/></section>
+        <section className="workspace-pane" hidden={page !== 'Account Security'}><SecurityCenter active={page === 'Account Security'} onSignedOut={() => { changeBrowserAccount(false); endLocalSession(); }}/></section>
+        </>}
       </div>
     </main>
     {menu && <button type="button" className="overlay" aria-label="Close menu" onClick={() => setMenu(false)}/>}
@@ -542,3 +629,6 @@ function App() {
 }
 
 createRoot(document.getElementById('root')).render(<React.StrictMode><App/></React.StrictMode>);
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/offline-shell.js').catch(error => console.warn('Offline reload is unavailable:', error));
+}

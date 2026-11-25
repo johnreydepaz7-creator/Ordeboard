@@ -32,8 +32,8 @@ router.post('/login', async (request, response, next) => {
       if (!currentUser) return response.status(401).json({ message: 'Account is inactive.' });
       await Session.updateMany({ userId: user._id, revokedAt: null }, { revokedAt: new Date() });
     }
-    await issueSession(response, currentUser, request);
-    response.json({ user: { id: String(user._id), name: user.name, email: user.email, role: user.role } });
+    const session = await issueSession(response, currentUser, request);
+    response.json({ user: { id: String(user._id), name: user.name, email: user.email, role: user.role }, expiresAt: session.expiresAt });
   } catch (error) { next(error); }
 });
 
@@ -44,7 +44,7 @@ router.post('/logout', requireAuth, async (request, response, next) => {
     response.json({ message: 'Signed out.' });
   } catch (error) { next(error); }
 });
-router.get('/me', requireAuth, (request, response) => response.json({ user: request.user }));
+router.get('/me', requireAuth, (request, response) => response.json({ user: request.user, expiresAt: request.sessionRecord.expiresAt }));
 router.get('/owner-check', requireAuth, ownerOnly, (_request, response) => response.json({ allowed: true }));
 
 // Changing a password signs out ALL devices (including the current browser).

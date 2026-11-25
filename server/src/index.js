@@ -13,6 +13,7 @@ import authRoutes from './routes/auth.js';
 import passwordResetRoutes from './routes/passwordReset.js';
 import emailChangeRoutes from './routes/emailChange.js';
 import User from './models/User.js';
+import Order from './models/Order.js';
 import { emailIsConfigured } from './security/mailer.js';
 import staffRoutes from './routes/staff.js';
 import securityRoutes from './routes/security.js';
@@ -100,6 +101,10 @@ app.use((request, response, next) => {
   next();
 });
 // Step 3: Attach API routes. Each route lives in its own file.
+app.use('/api', (_request, response, next) => {
+  response.set('Cache-Control', 'no-store');
+  next();
+});
 // Safe status check: never expose account emails or allow browser-based owner creation.
 app.get('/api/setup/status', async (_request, response, next) => {
   try {
@@ -145,6 +150,8 @@ app.use((error, _request, response, _next) => {
 // Step 4: Connect to the database BEFORE accepting incoming requests.
 await mongoose.connect(process.env.MONGODB_URI);
 startForecastArchive();
+// Accept order writes only after MongoDB enforces submission-key uniqueness.
+await Order.createIndexes();
 if (!await User.exists({})) console.warn('No accounts detected. Restore a database backup or run the local create-owner command to initialize OrderBoard.');
 if (!emailIsConfigured()) console.warn('Account emails are disabled. See the email configuration in README.md.');
 const port = Number(process.env.PORT || 4000);

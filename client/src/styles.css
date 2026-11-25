@@ -483,6 +483,12 @@ body { color:var(--ink); }
 .order-total strong { font-size:16px; }
 .order-modal-actions { bottom:-15px;gap:6px;padding:8px 0 0; }
 .order-modal-actions .order-action { min-width:115px; }
+.order-drafts { margin-bottom:12px;padding:10px 14px;background:white;border:1px solid var(--line);border-radius:7px; }
+.order-drafts h2 { margin:0 0 6px;font-size:15px; }
+.order-drafts p { margin:6px 0;color:var(--muted); }
+.order-draft-row { display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;border-top:1px solid var(--line); }
+.order-draft-row strong { overflow-wrap:anywhere; }
+.order-draft-row span { display:block;color:var(--muted);font-size:12px; }
 /* Inventory entries become a full-width working list rather than small tiles. */
 .phase3 { gap:10px; }
 .phase3-form { gap:9px; }
