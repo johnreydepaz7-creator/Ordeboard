@@ -1,0 +1,123 @@
+.schedule-layout {
+  container: schedule / inline-size;
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+}
+.schedule-layout .order-card { padding: 13px 15px; }
+.schedule-toolbar,
+.schedule-controls,
+.schedule-day-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 14px;
+}
+.schedule-toolbar h3,
+.schedule-reminders h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.schedule-toolbar h3 svg,
+.schedule-reminders h3 svg { color: var(--accent); flex-shrink: 0; }
+.schedule-layout h3 { margin: 0; font-size: 15px; }
+.schedule-toolbar p { margin: 4px 0 0; font-size: 12px; }
+.schedule-toolbar-actions,
+.schedule-filters { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; }
+.schedule-layout .status-button { min-height: 36px; padding: 6px 10px; border-radius: 6px; }
+.schedule-columns,
+.schedule-agenda {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: 12px;
+}
+.schedule-filters label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.schedule-filters input,
+.schedule-filters select {
+  min-width: 0;
+  width: 100%;
+  height: 36px;
+  padding: 4px 8px;
+  border: 1px solid var(--control-line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.schedule-empty { margin: 0; }
+.schedule-day {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--surface);
+}
+.schedule-day-header {
+  padding: 9px 13px;
+  border-bottom: 1px solid var(--line);
+  border-radius: 6px 6px 0 0;
+  background: var(--surface-tint);
+}
+.schedule-day-header h4 { margin: 0; font-size: 13px; }
+.schedule-day-header > span { color: var(--muted); font-size: 12px; }
+.schedule-entries { margin: 0; padding: 0; list-style: none; }
+.schedule-entry {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 10px 13px;
+  border-bottom: 1px solid var(--line);
+}
+.schedule-entry:last-child,
+.schedule-reminder-item:last-child { border-bottom: 0; }
+.schedule-entry-time { color: var(--accent-text); font-size: 12px; font-weight: 750; white-space: nowrap; }
+.schedule-entry-details { display: grid; gap: 3px; font-size: 13px; overflow-wrap: anywhere; }
+.schedule-entry-details > span { color: var(--muted); }
+.schedule-entry-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+.schedule-entry-tags > span,
+.schedule-urgency { padding: 2px 6px; border-radius: 4px; font-size: 11px; }
+.schedule-entry-tags > span { background: var(--surface-tint); color: var(--muted); }
+
+.schedule-reminders { min-width: 0; align-self: start; }
+.schedule-reminders h3 { scroll-margin-top: 66px; }
+.schedule-reminder-counts { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
+.schedule-urgency { background: #faecd0; color: #75480d; font-weight: 750; }
+.schedule-urgency[data-overdue="true"] { background: #fbe4e0; color: #823239; }
+.schedule-reminder-scroll {
+  max-height: min(42dvh, 360px);
+  margin-top: 10px;
+  padding-right: 5px;
+  border-top: 1px solid var(--line);
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+.schedule-reminder-item {
+  display: grid;
+  gap: 3px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.schedule-reminder-meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 6px; }
+.schedule-reminder-meta > span:last-child,
+.schedule-reminder-item time { color: var(--muted); font-size: 11px; }
+.schedule-reminder-item p { margin: 0; }
+
+@container schedule (min-width: 820px) {
+  .schedule-columns { grid-template-columns: minmax(0, 2fr) minmax(250px, 1fr); }
+  .schedule-toolbar-actions .schedule-jump { display: none; }
+}
+
+@container schedule (max-width: 420px) {
+  .schedule-filters { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr); width: 100%; }
+  .schedule-entry { grid-template-columns: 58px minmax(0, 1fr); }
+  .schedule-entry > button { grid-column: 2; justify-self: start; }
+}
